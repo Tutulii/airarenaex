@@ -1,0 +1,6 @@
+[submodule "arc-stack/contracts/lib/openzeppelin-contracts"]
+	path = arc-stack/contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts.git
+[submodule "arc-stack/contracts/lib/forge-std"]
+	path = arc-stack/contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std.git

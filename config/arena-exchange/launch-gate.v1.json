@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 1,
+  "gateId": "air-arena-arc-public-mainnet-launch-v1",
+  "status": "blocked-pending-independent-approvals",
+  "scopeManifest": "config/arena-exchange/beta-scope.v1.json",
+  "threatModel": "config/arena-exchange/threat-model.v1.json",
+  "authorityMatrix": "config/arena-exchange/authority-matrix.v1.json",
+  "currentReleaseClass": "capped-arc-testnet-beta-only",
+  "publicMainnetAllowed": false,
+  "realValuePublicAccessAllowed": false,
+  "automaticFailClosed": true,
+  "emergencyOverrideAllowed": false,
+  "selfApprovalAllowed": false,
+  "notLegalAdvice": true,
+  "betaConstraints": {
+    "network": "arc-testnet",
+    "chainId": 5042002,
+    "exchangeAddress": "0xEad589fA1b8BE258F47D3601B0c39238A364139b",
+    "allowlistRequired": true,
+    "depositCapsRequired": true,
+    "realWorldValueRequired": false,
+    "singleStableErc20": true,
+    "collateralAddress": "0x3600000000000000000000000000000000000000",
+    "collateralDecimals": 6,
+    "subjectiveMarketsAllowed": false,
+    "leverageAllowed": false,
+    "serverHeldAgentKeysAllowed": false,
+    "publicMarketingAsMainnetProductionAllowed": false
+  },
+  "requiredApprovalDomains": [
+    {
+      "domainId": "legal",
+      "ownerRole": "legal_compliance_owner",
+      "status": "pending",
+      "mustBeIndependentOf": ["deployment_executor", "security_release_owner", "contract_admin_multisig"],
+      "evidenceRequired": [
+        "written jurisdiction-by-jurisdiction product classification",
+        "licensing or registration determination",
+        "eligibility, age and restricted-location policy",
+        "sanctions and AML/KYC applicability determination",
+        "consumer protection, responsible-use and dispute disclosures",
+        "tax and reporting responsibility determination"
+      ]
+    },
+    {
+      "domainId": "privacy-data-protection",
+      "ownerRole": "legal_compliance_owner",
+      "status": "pending",
+      "mustBeIndependentOf": ["deployment_executor"],
+      "evidenceRequired": [
+        "data inventory and lawful-basis review",
+        "privacy notice and retention schedule",
+        "data-subject request and deletion procedure",
+        "processor and cross-border transfer review",
+        "breach notification procedure"
+      ]
+    },
+    {
+      "domainId": "security",
+      "ownerRole": "security_release_owner",
+      "status": "pending",
+      "mustBeIndependentOf": ["deployment_executor", "contract_admin_multisig"],
+      "evidenceRequired": [
+        "independent ArenaExchange Solidity audit closed",
+        "deployed runtime bytecode matches the audited artifact",
+        "P0 and P1 application findings closed",
+        "threat-model controls traced to tests and runbooks",
+        "software bill of materials and artifact provenance",
+        "key custody and rotation drill evidence"
+      ]
+    },
+    {
+      "domainId": "protocol-custody",
+      "ownerRole": "contract_admin_multisig",
+      "status": "pending",
+      "mustBeIndependentOf": ["deployment_executor", "treasury_multisig"],
+      "evidenceRequired": [
+        "integer ledger and complete-set invariant proof",
+        "contract role and default-admin review",
+        "USDC address, decimals and transfer-accounting evidence",
+        "withdrawal, batch, resolution and invalidation property tests",
+        "resolver evidence binding proof",
+        "capped collateral parameter sign-off"
+      ]
+    },
+    {
+      "domainId": "operations",
+      "ownerRole": "recovery_multisig",
+      "status": "pending",
+      "mustBeIndependentOf": ["deployment_executor", "emergency_pauser"],
+      "evidenceRequired": [
+        "48-hour ARC Testnet soak with zero custody drift",
+        "load test meets published capped-beta SLOs",
+        "restore, failover and rollback drills",
+        "oracle, RPC, key-compromise and reconciliation incident runbooks",
+        "status page, on-call owner and user communication process"
+      ]
+    },
+    {
+      "domainId": "release-artifact",
+      "ownerRole": "deployment_executor",
+      "status": "pending",
+      "mustBeIndependentOf": ["legal_compliance_owner", "security_release_owner", "contract_admin_multisig"],
+      "evidenceRequired": [
+        "immutable approved artifact digest",
+        "reproducible fresh-checkout build",
+        "deployed contract bytecode attestation",
+        "environment-specific configuration attestation",
+        "database migration rehearsal",
+        "signed go-no-go record referencing every approval"
+      ]
+    }
+  ],
+  "hardBlockers": [
+    {"blockerId": "LG-01-JURISDICTION", "ownerDomain": "legal", "state": "open", "description": "No written jurisdiction-specific classification or licensing determination exists."},
+    {"blockerId": "LG-02-PRIVACY", "ownerDomain": "privacy-data-protection", "state": "open", "description": "Privacy, retention, processor, cross-border and breach obligations are not approved."},
+    {"blockerId": "LG-03-INDEPENDENT-AUDIT", "ownerDomain": "security", "state": "open", "description": "ArenaExchange and its deployed runtime bytecode have not received a closed independent Solidity audit."},
+    {"blockerId": "LG-04-CUSTODY-PROOF", "ownerDomain": "protocol-custody", "state": "open", "description": "Complete-set, reservation, role, USDC, solvency, batch and payout invariants are not yet fully proven for the target architecture."},
+    {"blockerId": "LG-05-FAIR-ORDERING", "ownerDomain": "security", "state": "open", "description": "The deterministic frequent-batch auction and its replay/fair-ordering evidence are not yet complete."},
+    {"blockerId": "LG-06-KEY-CUSTODY", "ownerDomain": "security", "state": "open", "description": "Managed non-exportable service signers, hardware multisig membership and rotation evidence are incomplete."},
+    {"blockerId": "LG-07-LIVE-EVIDENCE", "ownerDomain": "operations", "state": "open", "description": "The required load, chaos, restore, failover and 48-hour ARC Testnet soak evidence does not exist."},
+    {"blockerId": "LG-08-RELEASE-PROVENANCE", "ownerDomain": "release-artifact", "state": "open", "description": "An approved reproducible artifact, SBOM, bytecode attestation, provenance and signed go-no-go record do not exist."},
+    {"blockerId": "LG-09-PRODUCT-ISOLATION", "ownerDomain": "security", "state": "open", "description": "Fresh-environment proof of ARC AIR Arena financial, key, database, contract, API, MCP and SDK isolation is pending."},
+    {
+      "blockerId": "LG-10-RESOLVER-EVIDENCE-BINDING",
+      "ownerDomain": "protocol-custody",
+      "state": "open",
+      "description": "The current ARC contract accepts an in-range caller-supplied winning outcome without binding source evidence and MarketSpec derivation on-chain.",
+      "codeEvidence": ["arc-stack/contracts/src/ArenaExchange.sol:resolveMarket", "arc-stack/src/middleman.ts:functionName=resolveMarket"]
+    },
+    {
+      "blockerId": "LG-11-SERVICE-KEY-CUSTODY",
+      "ownerDomain": "security",
+      "state": "open",
+      "description": "ARC relayer, market-admin, matcher and resolver keys are currently exportable environment secrets rather than managed non-exportable signers.",
+      "codeEvidence": ["arc-stack/src/config.ts:ARC_RELAYER_PRIVATE_KEY", "arc-stack/src/config.ts:ARC_RESOLVER_PRIVATE_KEY"]
+    },
+    {
+      "blockerId": "LG-12-PAUSER-RESUME",
+      "ownerDomain": "protocol-custody",
+      "state": "open",
+      "description": "The current PAUSER_ROLE can both pause and unpause, violating the signed pause/recovery separation-of-duties design.",
+      "codeEvidence": ["arc-stack/contracts/src/ArenaExchange.sol:pause", "arc-stack/contracts/src/ArenaExchange.sol:unpause"]
+    },
+    {
+      "blockerId": "LG-13-ADMIN-TIMELOCK",
+      "ownerDomain": "protocol-custody",
+      "state": "open",
+      "description": "Default-admin role changes and fee updates are not yet enforced through the required 48-hour timelock and independent approval flow.",
+      "codeEvidence": ["arc-stack/contracts/src/ArenaExchange.sol:DEFAULT_ADMIN_ROLE", "arc-stack/contracts/src/ArenaExchange.sol:setFeeBps"]
+    }
+  ],
+  "releaseRule": {
+    "allApprovalDomainsMustBeApproved": true,
+    "allEvidenceItemsMustReferenceImmutableArtifacts": true,
+    "allHardBlockersMustBeClosed": true,
+    "unresolvedP0OrP1Allowed": false,
+    "independentSmartContractAuditRequired": true,
+    "deployedBytecodeMustMatchAuditedArtifact": true,
+    "signedGoNoGoRequired": true,
+    "approvedArtifactDigestRequired": true,
+    "legalScopeMustMatchDeployedScopeExactly": true,
+    "configurationCanWeakenGate": false
+  },
+  "requiredUserDisclosures": [
+    "market rules, cutoff, resolution source, witness and invalidation policy",
+    "fees, caps, collateral asset and withdrawal conditions",
+    "sequencer visibility and censorship trust boundary",
+    "oracle delay, correction and divergence behavior",
+    "contract, stablecoin, RPC and operational risks",
+    "restricted jurisdictions and user eligibility",
+    "incident, support, complaint and dispute channels"
+  ],
+  "technicalApproval": {
+    "status": "approved",
+    "approvedBy": "AIR Arena project owner",
+    "approvedAt": "2026-07-21T09:27:12Z",
+    "approvalReference": "conversation:2026-07-21:complete-arc-days-1-3",
+    "meaning": "The fail-closed launch checkpoint design is approved; no legal or public-mainnet approval is granted."
+  }
+}

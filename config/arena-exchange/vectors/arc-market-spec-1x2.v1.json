@@ -1,0 +1,114 @@
+{
+  "vectorVersion": 1,
+  "name": "arc-football-regulation-1x2-v1",
+  "purpose": "Canonical ARC Testnet MarketSpec serialization and Keccak-256 interoperability vector.",
+  "draft": {
+    "schemaVersion": "arc-market-spec-v1",
+    "chain": {
+      "family": "EVM",
+      "network": "arc-testnet",
+      "chainId": 5042002,
+      "exchangeAddress": "0xEad589fA1b8BE258F47D3601B0c39238A364139b",
+      "contractVersion": "arena-exchange-v1"
+    },
+    "marketNonce": "1",
+    "category": "SPORTS",
+    "templateId": "sports.result.1x2.v1",
+    "collateral": {
+      "tokenAddress": "0x3600000000000000000000000000000000000000",
+      "symbol": "USDC",
+      "decimals": 6,
+      "payoutAtoms": "1000000"
+    },
+    "outcomes": [
+      { "index": 0, "id": "home", "label": "Home win" },
+      { "index": 1, "id": "draw", "label": "Draw" },
+      { "index": 2, "id": "away", "label": "Away win" }
+    ],
+    "scheduledStartAt": "2026-07-20T13:00:00Z",
+    "tradingOpensAt": "2026-07-20T12:00:00Z",
+    "tradingClosesAt": "2026-07-20T14:59:00Z",
+    "resolutionEarliestAt": "2026-07-20T15:00:00Z",
+    "parameters": {
+      "version": "arc.launch-v1",
+      "collateralAllowlistVersion": "arc.collateral-v1",
+      "batch": {
+        "version": "arc.batch-v1",
+        "intervalMs": 2000,
+        "cancelCutoffMs": 200,
+        "priceScalePpm": 1000000,
+        "minPricePpm": 1000,
+        "maxPricePpm": 999000,
+        "minQuantityAtoms": "10000",
+        "quantityStepAtoms": "10000",
+        "maxOrdersPerBatch": 10000,
+        "allocationMethod": "PRO_RATA_AT_CLEARING_PRICE_V1",
+        "tieBreakMethod": "ORDER_HASH_ASC_V1"
+      },
+      "fees": {
+        "version": "arc.fees-v1",
+        "tradeFeeBps": 25,
+        "rounding": "CEIL",
+        "minimumFeeAtoms": "1",
+        "collector": "PROTOCOL_FEE_VAULT"
+      },
+      "caps": {
+        "version": "arc.caps-v1",
+        "walletCollateralAtoms": "1000000000",
+        "walletOpenOrderReserveAtoms": "500000000",
+        "marketCollateralAtoms": "10000000000",
+        "treasuryMarketBudgetAtoms": "1000000000",
+        "globalCollateralAtoms": "50000000000",
+        "maxOrderQuantityAtoms": "100000000",
+        "maxOpenOrdersPerWallet": 100
+      },
+      "oracle": {
+        "version": "arc.oracle-v1",
+        "minimumIndependentSources": 2,
+        "maxReportAgeSeconds": 120,
+        "maxSourceTimestampSkewSeconds": 30,
+        "minimumArcConfirmations": 2,
+        "onIntegrityFailure": "HALT"
+      },
+      "referenceData": {
+        "version": "arc.reference-v1",
+        "liveOddsExecution": "NEVER",
+        "staleDataAction": "SUSPEND_MATCHING"
+      }
+    },
+    "resolutionRule": {
+      "version": "txline.football.1x2-v1",
+      "adapter": "txline.sports-result.v1",
+      "fixtureId": "18179552",
+      "sport": "football",
+      "settlementBasis": "REGULATION_TIME",
+      "primarySourceId": "txline-primary",
+      "witnessSourceId": "approved-result-witness",
+      "fieldMapping": {
+        "fixtureId": "fixtureId",
+        "status": "status",
+        "homeScore": "homeScore",
+        "awayScore": "awayScore",
+        "action": "raw.Action"
+      },
+      "finalStatuses": ["full_time", "final"],
+      "finalActions": ["game_finalised"],
+      "graceSeconds": 900,
+      "onDivergence": "INVALID",
+      "onUnavailable": "INVALID",
+      "correctionPolicy": "ACCEPT_BEFORE_FINALIZATION_ONLY"
+    },
+    "invalidation": {
+      "version": "arc.invalidation-v1",
+      "payoutMethod": "EQUAL_PER_OUTCOME",
+      "rounding": "FLOOR",
+      "remainderDestination": "PROTOCOL_DUST_VAULT"
+    }
+  },
+  "expected": {
+    "canonicalIdentity": "{\"category\":\"SPORTS\",\"chainId\":5042002,\"collateralTokenAddress\":\"0x3600000000000000000000000000000000000000\",\"exchangeAddress\":\"0xEad589fA1b8BE258F47D3601B0c39238A364139b\",\"fixtureId\":\"18179552\",\"marketNonce\":\"1\",\"outcomes\":[{\"id\":\"home\",\"index\":0},{\"id\":\"draw\",\"index\":1},{\"id\":\"away\",\"index\":2}],\"parameterVersion\":\"arc.launch-v1\",\"scheduledStartAt\":\"2026-07-20T13:00:00Z\",\"schemaVersion\":\"arc-market-spec-v1\",\"settlementBasis\":\"REGULATION_TIME\",\"templateId\":\"sports.result.1x2.v1\"}",
+    "marketId": "0x6dda7eb4386cd593f063f4a73a776c25ec81dbbc6c382dba7adec7c2ad8d514c",
+    "canonicalSpecPayload": "{\"category\":\"SPORTS\",\"chain\":{\"chainId\":5042002,\"contractVersion\":\"arena-exchange-v1\",\"exchangeAddress\":\"0xEad589fA1b8BE258F47D3601B0c39238A364139b\",\"family\":\"EVM\",\"network\":\"arc-testnet\"},\"collateral\":{\"decimals\":6,\"payoutAtoms\":\"1000000\",\"symbol\":\"USDC\",\"tokenAddress\":\"0x3600000000000000000000000000000000000000\"},\"invalidation\":{\"payoutMethod\":\"EQUAL_PER_OUTCOME\",\"remainderDestination\":\"PROTOCOL_DUST_VAULT\",\"rounding\":\"FLOOR\",\"version\":\"arc.invalidation-v1\"},\"marketId\":\"0x6dda7eb4386cd593f063f4a73a776c25ec81dbbc6c382dba7adec7c2ad8d514c\",\"marketNonce\":\"1\",\"outcomes\":[{\"id\":\"home\",\"index\":0,\"label\":\"Home win\"},{\"id\":\"draw\",\"index\":1,\"label\":\"Draw\"},{\"id\":\"away\",\"index\":2,\"label\":\"Away win\"}],\"parameters\":{\"batch\":{\"allocationMethod\":\"PRO_RATA_AT_CLEARING_PRICE_V1\",\"cancelCutoffMs\":200,\"intervalMs\":2000,\"maxOrdersPerBatch\":10000,\"maxPricePpm\":999000,\"minPricePpm\":1000,\"minQuantityAtoms\":\"10000\",\"priceScalePpm\":1000000,\"quantityStepAtoms\":\"10000\",\"tieBreakMethod\":\"ORDER_HASH_ASC_V1\",\"version\":\"arc.batch-v1\"},\"caps\":{\"globalCollateralAtoms\":\"50000000000\",\"marketCollateralAtoms\":\"10000000000\",\"maxOpenOrdersPerWallet\":100,\"maxOrderQuantityAtoms\":\"100000000\",\"treasuryMarketBudgetAtoms\":\"1000000000\",\"version\":\"arc.caps-v1\",\"walletCollateralAtoms\":\"1000000000\",\"walletOpenOrderReserveAtoms\":\"500000000\"},\"collateralAllowlistVersion\":\"arc.collateral-v1\",\"fees\":{\"collector\":\"PROTOCOL_FEE_VAULT\",\"minimumFeeAtoms\":\"1\",\"rounding\":\"CEIL\",\"tradeFeeBps\":25,\"version\":\"arc.fees-v1\"},\"oracle\":{\"maxReportAgeSeconds\":120,\"maxSourceTimestampSkewSeconds\":30,\"minimumArcConfirmations\":2,\"minimumIndependentSources\":2,\"onIntegrityFailure\":\"HALT\",\"version\":\"arc.oracle-v1\"},\"referenceData\":{\"liveOddsExecution\":\"NEVER\",\"staleDataAction\":\"SUSPEND_MATCHING\",\"version\":\"arc.reference-v1\"},\"version\":\"arc.launch-v1\"},\"resolutionEarliestAt\":\"2026-07-20T15:00:00Z\",\"resolutionRule\":{\"adapter\":\"txline.sports-result.v1\",\"correctionPolicy\":\"ACCEPT_BEFORE_FINALIZATION_ONLY\",\"fieldMapping\":{\"action\":\"raw.Action\",\"awayScore\":\"awayScore\",\"fixtureId\":\"fixtureId\",\"homeScore\":\"homeScore\",\"status\":\"status\"},\"finalActions\":[\"game_finalised\"],\"finalStatuses\":[\"final\",\"full_time\"],\"fixtureId\":\"18179552\",\"graceSeconds\":900,\"onDivergence\":\"INVALID\",\"onUnavailable\":\"INVALID\",\"primarySourceId\":\"txline-primary\",\"settlementBasis\":\"REGULATION_TIME\",\"sport\":\"football\",\"version\":\"txline.football.1x2-v1\",\"witnessSourceId\":\"approved-result-witness\"},\"scheduledStartAt\":\"2026-07-20T13:00:00Z\",\"schemaVersion\":\"arc-market-spec-v1\",\"templateId\":\"sports.result.1x2.v1\",\"tradingClosesAt\":\"2026-07-20T14:59:00Z\",\"tradingOpensAt\":\"2026-07-20T12:00:00Z\"}",
+    "specHash": "0x971ecbb92167a577b9e8b7a570303fa46930c8988b465e07d778aed5cb85b2f4"
+  }
+}

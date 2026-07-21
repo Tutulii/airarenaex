@@ -1,0 +1,450 @@
+{
+  "schemaVersion": 1,
+  "modelId": "air-arena-arc-authority-matrix-v1",
+  "status": "approved",
+  "scopeManifest": "config/arena-exchange/beta-scope.v1.json",
+  "network": {"name": "arc-testnet", "chainId": 5042002},
+  "exchangeContract": "ArenaExchange",
+  "exchangeAddress": "0xEad589fA1b8BE258F47D3601B0c39238A364139b",
+  "apiService": "airarena-arc-api",
+  "apiNamespace": "/v1",
+  "mcpService": "airarena-arc-mcp",
+  "mcpToolPrefix": "airarena_arc_",
+  "databaseNamespace": "arc_",
+  "defaultDeny": true,
+  "keyPolicy": {
+    "rawPrivateKeysAcceptedByApi": false,
+    "rawPrivateKeysPersisted": false,
+    "productionSecretsInEnvironmentFiles": false,
+    "privilegedHumanKeysRequireHardwareBacking": true,
+    "serviceKeysRequireManagedKms": true,
+    "serviceKeysCurrentlyEnvironmentBacked": true,
+    "serviceKeysMustMigrateToManagedKmsBeforePublicLaunch": true,
+    "sharedKeysAcrossAirOtcAndAirArena": false,
+    "quarterlyMembershipReviewRequired": true,
+    "emergencyRotationRunbookRequired": true
+  },
+  "globallyForbiddenCapabilities": [
+    "accept_wallet_private_key",
+    "bypass_launch_gate",
+    "choose_winner_discretionarily",
+    "edit_open_market_spec",
+    "move_another_wallet_collateral",
+    "redirect_settlement_payout",
+    "reuse_air_otc_financial_authority"
+  ],
+  "roles": [
+    {
+      "roleId": "agent_wallet",
+      "principalType": "external-wallet",
+      "keyCustody": "wallet-local",
+      "permissions": [
+        "deposit_own_collateral",
+        "redeem_own_claims",
+        "sign_own_cancel",
+        "sign_own_order",
+        "withdraw_own_available_collateral"
+      ],
+      "prohibitions": [
+        "change_market_parameters",
+        "move_another_wallet_collateral",
+        "propose_batch",
+        "publish_resolution",
+        "manage_contract_roles"
+      ]
+    },
+    {
+      "roleId": "market_admin_multisig",
+      "principalType": "multisig",
+      "keyCustody": "hardware-backed-multisig",
+      "permissions": [
+        "create_market_draft",
+        "validate_market_before_open"
+      ],
+      "prohibitions": [
+        "choose_winner_discretionarily",
+        "edit_open_market_spec",
+        "move_user_collateral",
+        "propose_batch",
+        "publish_resolution"
+      ]
+    },
+    {
+      "roleId": "batch_sequencer",
+      "principalType": "service",
+      "keyCustody": "managed-kms",
+      "permissions": [
+        "accept_eligible_orders",
+        "assign_batch",
+        "propose_batch_commitment",
+        "sign_order_receipt"
+      ],
+      "prohibitions": [
+        "change_market_parameters",
+        "move_user_collateral",
+        "publish_resolution",
+        "redirect_settlement_payout",
+        "manage_contract_roles"
+      ]
+    },
+    {
+      "roleId": "resolution_quorum",
+      "principalType": "quorum",
+      "keyCustody": "independent-managed-signers",
+      "permissions": [
+        "attest_allowed_normalized_result",
+        "attest_deterministic_invalidation"
+      ],
+      "prohibitions": [
+        "change_payout_formula",
+        "choose_winner_discretionarily",
+        "move_user_collateral",
+        "propose_batch",
+        "redirect_settlement_payout"
+      ]
+    },
+    {
+      "roleId": "oracle_adapter",
+      "principalType": "service",
+      "keyCustody": "managed-kms",
+      "permissions": [
+        "publish_authenticated_source_report"
+      ],
+      "prohibitions": [
+        "change_market_parameters",
+        "finalize_resolution",
+        "move_user_collateral",
+        "propose_batch",
+        "select_payout_recipient"
+      ]
+    },
+    {
+      "roleId": "protocol_liquidity_agent",
+      "principalType": "isolated-service-wallet",
+      "keyCustody": "managed-kms",
+      "permissions": [
+        "fund_own_reservations",
+        "sign_orders_within_protocol_vault_cap"
+      ],
+      "prohibitions": [
+        "borrow_user_collateral",
+        "bypass_market_cap",
+        "propose_batch",
+        "publish_resolution",
+        "withdraw_user_collateral"
+      ]
+    },
+    {
+      "roleId": "emergency_pauser",
+      "principalType": "multisig",
+      "keyCustody": "hardware-backed-multisig",
+      "permissions": [
+        "halt_global_order_ingress",
+        "halt_market",
+        "halt_new_batch_proposals"
+      ],
+      "prohibitions": [
+        "move_user_collateral",
+        "publish_resolution",
+        "redirect_settlement_payout",
+        "resume_market",
+        "manage_contract_roles"
+      ]
+    },
+    {
+      "roleId": "recovery_multisig",
+      "principalType": "multisig",
+      "keyCustody": "hardware-backed-multisig",
+      "permissions": [
+        "resume_after_reconciliation",
+        "rotate_compromised_service_authority"
+      ],
+      "prohibitions": [
+        "change_market_parameters",
+        "move_user_collateral",
+        "publish_resolution",
+        "redirect_settlement_payout",
+        "manage_contract_roles"
+      ]
+    },
+    {
+      "roleId": "contract_admin_multisig",
+      "principalType": "multisig",
+      "keyCustody": "hardware-backed-multisig",
+      "permissions": [
+        "approve_timelocked_role_change",
+        "rotate_contract_role_membership"
+      ],
+      "prohibitions": [
+        "bypass_role_change_timelock",
+        "edit_open_market_spec",
+        "move_user_collateral",
+        "publish_resolution",
+        "redirect_settlement_payout"
+      ]
+    },
+    {
+      "roleId": "treasury_multisig",
+      "principalType": "multisig",
+      "keyCustody": "hardware-backed-multisig",
+      "permissions": [
+        "collect_accrued_protocol_fees",
+        "fund_protocol_liquidity_vault",
+        "withdraw_uncommitted_protocol_capital"
+      ],
+      "prohibitions": [
+        "borrow_user_collateral",
+        "move_user_collateral",
+        "propose_batch",
+        "publish_resolution",
+        "redirect_settlement_payout"
+      ]
+    },
+    {
+      "roleId": "reconciler",
+      "principalType": "read-only-service",
+      "keyCustody": "managed-workload-identity",
+      "permissions": [
+        "emit_reconciliation_alert",
+        "read_finalized_ledger_and_vault_state"
+      ],
+      "prohibitions": [
+        "change_ledger",
+        "move_user_collateral",
+        "propose_batch",
+        "publish_resolution",
+        "suppress_reconciliation_mismatch"
+      ]
+    },
+    {
+      "roleId": "legal_compliance_owner",
+      "principalType": "human-approval-role",
+      "keyCustody": "named-approval-record",
+      "permissions": [
+        "approve_exact_launch_scope",
+        "reject_launch"
+      ],
+      "prohibitions": [
+        "deploy_release",
+        "move_user_collateral",
+        "propose_batch",
+        "publish_resolution",
+        "waive_technical_security_gate"
+      ]
+    },
+    {
+      "roleId": "security_release_owner",
+      "principalType": "human-approval-role",
+      "keyCustody": "named-approval-record",
+      "permissions": [
+        "approve_audited_release_artifact",
+        "reject_launch"
+      ],
+      "prohibitions": [
+        "deploy_release",
+        "move_user_collateral",
+        "publish_resolution",
+        "waive_legal_gate",
+        "waive_unresolved_p0_p1"
+      ]
+    },
+    {
+      "roleId": "deployment_executor",
+      "principalType": "ci-workload-identity",
+      "keyCustody": "managed-workload-identity",
+      "permissions": [
+        "deploy_approved_digest"
+      ],
+      "prohibitions": [
+        "approve_own_release",
+        "bypass_launch_gate",
+        "change_release_artifact",
+        "move_user_collateral",
+        "publish_resolution"
+      ]
+    }
+  ],
+  "protectedActions": [
+    {
+      "actionId": "create_market_draft",
+      "authorizedRoles": ["market_admin_multisig"],
+      "minimumQuorum": 2,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "template_allowlisted",
+        "collateral_token_allowlisted",
+        "market_caps_present"
+      ]
+    },
+    {
+      "actionId": "validate_market",
+      "authorizedRoles": ["market_admin_multisig"],
+      "minimumQuorum": 2,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "canonical_spec_hash_matches",
+        "market_not_open",
+        "oracle_policy_complete"
+      ]
+    },
+    {
+      "actionId": "propose_batch",
+      "authorizedRoles": ["batch_sequencer"],
+      "minimumQuorum": 1,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "market_open",
+        "prior_root_matches",
+        "order_root_published",
+        "reservations_sufficient"
+      ]
+    },
+    {
+      "actionId": "attest_resolution",
+      "authorizedRoles": ["resolution_quorum"],
+      "minimumQuorum": 2,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "market_closed",
+        "source_reports_authenticated",
+        "source_quorum_matches_spec",
+        "outcome_derived_from_immutable_rule"
+      ]
+    },
+    {
+      "actionId": "pause_market",
+      "authorizedRoles": ["emergency_pauser"],
+      "minimumQuorum": 1,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "reason_code_recorded",
+        "audit_event_emitted"
+      ]
+    },
+    {
+      "actionId": "resume_market",
+      "authorizedRoles": ["recovery_multisig"],
+      "minimumQuorum": 2,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "incident_owner_approval",
+        "ledger_vault_reconciliation_zero",
+        "oracle_integrity_restored",
+        "recovery_evidence_published"
+      ]
+    },
+    {
+      "actionId": "manage_contract_roles",
+      "authorizedRoles": ["contract_admin_multisig"],
+      "minimumQuorum": 3,
+      "timelockSeconds": 172800,
+      "requiredConditions": [
+        "security_release_owner_approved",
+        "artifact_digest_published",
+        "migration_rehearsal_passed",
+        "rollback_plan_approved"
+      ]
+    },
+    {
+      "actionId": "fund_protocol_liquidity",
+      "authorizedRoles": ["treasury_multisig"],
+      "minimumQuorum": 2,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "protocol_owned_source",
+        "market_budget_cap_enforced"
+      ]
+    },
+    {
+      "actionId": "withdraw_protocol_capital",
+      "authorizedRoles": ["treasury_multisig"],
+      "minimumQuorum": 2,
+      "timelockSeconds": 86400,
+      "requiredConditions": [
+        "capital_is_protocol_owned",
+        "capital_is_unreserved",
+        "user_liabilities_unchanged",
+        "reconciliation_zero"
+      ]
+    },
+    {
+      "actionId": "withdraw_user_collateral",
+      "authorizedRoles": ["agent_wallet"],
+      "minimumQuorum": 1,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "wallet_signature_valid",
+        "destination_owned_by_wallet",
+        "amount_not_above_finalized_available_balance",
+        "withdrawal_nonce_unused"
+      ]
+    },
+    {
+      "actionId": "deploy_public_mainnet",
+      "authorizedRoles": ["deployment_executor"],
+      "minimumQuorum": 1,
+      "timelockSeconds": 0,
+      "requiredConditions": [
+        "launch_gate_approved",
+        "legal_compliance_owner_approved",
+        "security_release_owner_approved",
+        "contract_admin_multisig_approved_digest",
+        "operations_readiness_approved"
+      ]
+    }
+  ],
+  "separationOfDuties": [
+    {
+      "ruleId": "financial-control-plane-separation",
+      "mutuallyExclusiveRoles": [
+        "batch_sequencer",
+        "resolution_quorum",
+        "emergency_pauser",
+        "contract_admin_multisig",
+        "treasury_multisig"
+      ],
+      "enforcement": "distinct keys and disjoint production membership"
+    },
+    {
+      "ruleId": "liquidity-independence",
+      "mutuallyExclusiveRoles": [
+        "protocol_liquidity_agent",
+        "batch_sequencer",
+        "resolution_quorum"
+      ],
+      "enforcement": "separate wallets, service identities, and budgets"
+    },
+    {
+      "ruleId": "release-approval-separation",
+      "mutuallyExclusiveRoles": [
+        "legal_compliance_owner",
+        "security_release_owner",
+        "deployment_executor",
+        "contract_admin_multisig"
+      ],
+      "enforcement": "independent named approvals and CI workload identity"
+    },
+    {
+      "ruleId": "pause-recovery-separation",
+      "mutuallyExclusiveRoles": [
+        "emergency_pauser",
+        "recovery_multisig"
+      ],
+      "enforcement": "pauser cannot resume; recovery requires evidence"
+    },
+    {
+      "ruleId": "product-authority-isolation",
+      "mutuallyExclusiveRoles": [
+        "air_otc_financial_authority",
+        "air_arena_financial_authority"
+      ],
+      "enforcement": "separate keys, namespaces, database roles, contracts, and ledgers"
+    }
+  ],
+  "approval": {
+    "status": "approved",
+    "approvedBy": "AIR Arena project owner",
+    "approvedAt": "2026-07-21T09:27:12Z",
+    "approvalReference": "conversation:2026-07-21:complete-arc-days-1-3"
+  }
+}

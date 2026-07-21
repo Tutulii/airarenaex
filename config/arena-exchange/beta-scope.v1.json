@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "scopeId": "air-arena-arc-capped-beta-v1",
+  "status": "approved",
+  "decisionRecords": [
+    "docs/adr/0001-capped-beta-platform-and-collateral.md",
+    "docs/adr/0002-exchange-product-and-program-boundary.md",
+    "docs/adr/0003-deterministic-market-and-execution-scope.md"
+  ],
+  "launch": {
+    "stage": "capped-arc-testnet-beta",
+    "chainFamily": "evm",
+    "network": "arc-testnet",
+    "chainId": 5042002,
+    "publicMainnet": false,
+    "realValuePublicAccess": false,
+    "allowlistRequired": true,
+    "depositCapsRequired": true
+  },
+  "collateral": {
+    "assetClass": "stable-erc20",
+    "symbol": "USDC",
+    "tokenAddress": "0x3600000000000000000000000000000000000000",
+    "applicationDecimals": 6,
+    "allowlistedTokenCount": 1,
+    "nativeGasAssetAllowedAsCollateral": false,
+    "yieldBearing": false,
+    "rehypothecation": false
+  },
+  "markets": {
+    "activeCategories": ["SPORTS"],
+    "reservedCategories": ["CRYPTO", "POLITICS"],
+    "templates": ["deterministic-sports-result"],
+    "outcomeCounts": [2, 3],
+    "permissionlessCreation": false,
+    "subjective": false,
+    "resolutionPolicy": "deterministic-or-invalid",
+    "unregisteredOracleAdaptersFailClosed": true
+  },
+  "execution": {
+    "mechanism": "frequent-batch-auction",
+    "signedLimitOrders": true,
+    "signatureStandard": "EIP-712",
+    "contractWalletStandard": "ERC-1271",
+    "continuousExecution": false,
+    "directAmmFills": false,
+    "leverage": false,
+    "borrowing": false,
+    "crossMargin": false
+  },
+  "productBoundary": {
+    "exchangeContract": "ArenaExchange",
+    "exchangeAddress": "0xEad589fA1b8BE258F47D3601B0c39238A364139b",
+    "apiService": "airarena-arc-api",
+    "apiSurface": "/v1",
+    "mcpService": "airarena-arc-mcp",
+    "mcpToolPrefix": "airarena_arc_",
+    "databaseNamespace": "arc_",
+    "sharesAirOtcFinancialState": false,
+    "sharesSolanaFinancialState": false,
+    "extendLegacyDealStateMachine": false
+  },
+  "excludedFeatures": [
+    "subjective-or-freeform-markets",
+    "leverage",
+    "borrowing",
+    "cross-margin",
+    "correlation-discounts",
+    "liquidation",
+    "yield-bearing-collateral",
+    "collateral-rehypothecation",
+    "continuous-execution",
+    "direct-amm-fills",
+    "permissionless-market-creation",
+    "cross-chain-collateral",
+    "governance-selected-live-outcomes",
+    "uncapped-deposits",
+    "unregistered-oracle-adapters",
+    "crypto-markets-without-approved-adapter",
+    "politics-markets-without-approved-adapter",
+    "unrestricted-public-mainnet"
+  ],
+  "approval": {
+    "status": "approved",
+    "approvedBy": "AIR Arena project owner",
+    "approvedAt": "2026-07-21T09:27:12Z",
+    "approvalReference": "conversation:2026-07-21:complete-arc-days-1-3"
+  }
+}

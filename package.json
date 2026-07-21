@@ -1,0 +1,30 @@
+{
+  "name": "airarenaex",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ARC-native prediction exchange for autonomous agents",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12 <25"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tutulii/airarenaex.git"
+  },
+  "scripts": {
+    "roadmap:day1:check": "node scripts/validate-arena-day1.mjs && node --test tests/arena-arc-day1-scope.test.mjs",
+    "roadmap:day1:gate": "node scripts/validate-arena-day1.mjs --require-signoff && node --test tests/arena-arc-day1-scope.test.mjs",
+    "roadmap:day2:check": "npm --prefix arc-stack run typecheck && npm --prefix arc-stack run test:market-spec && node scripts/validate-arena-day2.mjs",
+    "roadmap:day2:gate": "npm run roadmap:day1:gate && npm run roadmap:day2:check",
+    "roadmap:day3:check": "node scripts/validate-arena-day3.mjs && node --test tests/arena-day3-security-model.test.mjs",
+    "roadmap:day3:gate": "npm run roadmap:day2:gate && node scripts/validate-arena-day3.mjs --require-signoff && node --test tests/arena-day3-security-model.test.mjs",
+    "arc:build": "npm --prefix arc-stack run build",
+    "arc:test": "npm --prefix arc-stack test",
+    "arc:audit": "npm --prefix arc-stack audit --audit-level=high",
+    "contracts:fmt": "forge fmt --check --root arc-stack/contracts",
+    "contracts:lint": "forge lint --root arc-stack/contracts",
+    "contracts:test": "forge test --force --root arc-stack/contracts",
+    "contracts:size": "forge build --sizes --force --root arc-stack/contracts",
+    "verify": "npm run roadmap:day3:gate && npm run arc:build && npm run arc:test && npm run arc:audit && npm run contracts:fmt && npm run contracts:lint && npm run contracts:test && npm run contracts:size"
+  }
+}

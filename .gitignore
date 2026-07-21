@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+.env.development
+.env.production
+.DS_Store
+*.log
+
+arc-stack/contracts/cache/
+arc-stack/contracts/out/
+arc-stack/contracts/broadcast/
+arc-stack/contracts/deployments/*.json
