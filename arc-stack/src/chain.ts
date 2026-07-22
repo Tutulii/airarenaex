@@ -85,6 +85,25 @@ export const arenaExchangeAbi = [
   },
   {
     type: "function",
+    name: "cancelOrderBySig",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "cancellation",
+        type: "tuple",
+        components: [
+          { name: "maker", type: "address" },
+          { name: "orderHash", type: "bytes32" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint64" },
+        ],
+      },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
     name: "redeem",
     stateMutability: "nonpayable",
     inputs: [{ name: "marketId", type: "bytes32" }],
@@ -169,6 +188,13 @@ export const arenaExchangeAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "totalLiabilities",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
   },
   {
     type: "function",
@@ -290,6 +316,25 @@ export const orderTypes = {
   ],
 } as const;
 
+export const cancelTypes = {
+  Cancel: [
+    { name: "maker", type: "address" },
+    { name: "orderHash", type: "bytes32" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint64" },
+  ],
+} as const;
+
+export const acceptanceTypes = {
+  OrderAcceptance: [
+    { name: "orderHash", type: "bytes32" },
+    { name: "maker", type: "address" },
+    { name: "sequence", type: "uint64" },
+    { name: "acceptedAt", type: "uint64" },
+    { name: "requestHash", type: "bytes32" },
+  ],
+} as const;
+
 export type ArcOrder = {
   maker: Address;
   marketId: Hex;
@@ -302,6 +347,21 @@ export type ArcOrder = {
   clientOrderId: Hex;
 };
 
+export type ArcCancel = {
+  maker: Address;
+  orderHash: Hex;
+  nonce: bigint;
+  deadline: bigint;
+};
+
+export type OrderAcceptance = {
+  orderHash: Hex;
+  maker: Address;
+  sequence: bigint;
+  acceptedAt: bigint;
+  requestHash: Hex;
+};
+
 export function orderDomain(exchangeAddress: Address) {
   return { name: "AIR Arena Arc", version: "1", chainId: ARC_CHAIN_ID, verifyingContract: exchangeAddress } as const;
 }
@@ -312,6 +372,33 @@ export function hashArcOrder(exchangeAddress: Address, order: ArcOrder): Hex {
     types: orderTypes,
     primaryType: "Order",
     message: order,
+  });
+}
+
+export function hashArcCancel(exchangeAddress: Address, cancellation: ArcCancel): Hex {
+  return hashTypedData({
+    domain: orderDomain(exchangeAddress),
+    types: cancelTypes,
+    primaryType: "Cancel",
+    message: cancellation,
+  });
+}
+
+export function acceptanceDomain(exchangeAddress: Address) {
+  return {
+    name: "AIR Arena Arc Receipt",
+    version: "1",
+    chainId: ARC_CHAIN_ID,
+    verifyingContract: exchangeAddress,
+  } as const;
+}
+
+export function hashOrderAcceptance(exchangeAddress: Address, acceptance: OrderAcceptance): Hex {
+  return hashTypedData({
+    domain: acceptanceDomain(exchangeAddress),
+    types: acceptanceTypes,
+    primaryType: "OrderAcceptance",
+    message: acceptance,
   });
 }
 

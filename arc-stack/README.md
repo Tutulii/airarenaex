@@ -18,7 +18,8 @@ There is intentionally no frontend in this directory.
 - API: `https://airarena-arc-api-production.up.railway.app`
 - Middleman health: `https://airarena-arc-middleman-production.up.railway.app/health/ready`
 - MCP: `https://airarena-arc-mcp-production.up.railway.app/mcp`
-- Exchange: [`0xEad589fA1b8BE258F47D3601B0c39238A364139b`](https://testnet.arcscan.app/address/0xEad589fA1b8BE258F47D3601B0c39238A364139b)
+- Exchange V2: [`0x1457B0E54f697E9662E1678b74f545CFCe17e96a`](https://testnet.arcscan.app/address/0x1457B0E54f697E9662E1678b74f545CFCe17e96a)
+- Exchange V1 (exit only): [`0xEad589fA1b8BE258F47D3601B0c39238A364139b`](https://testnet.arcscan.app/address/0xEad589fA1b8BE258F47D3601B0c39238A364139b)
 
 The deployment uses a dedicated database and role-separated wallets. No signer material is committed to this repository or returned by the public API/MCP surfaces.
 

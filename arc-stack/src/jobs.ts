@@ -1,6 +1,14 @@
 import type { Database, DatabaseClient } from "./db.js";
 
-export const JOB_KINDS = ["SUBMIT_ORDER", "EXECUTE_MATCH", "CREATE_MARKET", "RESOLVE_MARKET", "INVALIDATE_MARKET"] as const;
+export const JOB_KINDS = [
+  "SUBMIT_ORDER",
+  "CANCEL_ORDER",
+  "EXECUTE_MATCH",
+  "EXECUTE_BATCH",
+  "CREATE_MARKET",
+  "RESOLVE_MARKET",
+  "INVALIDATE_MARKET",
+] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export type ArcJob = {
@@ -67,7 +75,7 @@ export async function claimNextJob(db: Database, workerId: string): Promise<ArcJ
       `SELECT id, kind, payload, status, attempts, max_attempts, idempotency_key
        FROM arc_jobs
        WHERE status IN ('PENDING','FAILED') AND available_at <= now()
-       ORDER BY created_at
+       ORDER BY created_at, id
        FOR UPDATE SKIP LOCKED
        LIMIT 1`,
     );
@@ -101,8 +109,13 @@ export async function completeJob(db: Database, id: string, txHash: string | nul
   );
 }
 
-export async function failJob(db: Database, job: ArcJob, error: string): Promise<boolean> {
-  const dead = job.attempts >= job.maxAttempts;
+export async function failJob(
+  db: Database,
+  job: ArcJob,
+  error: string,
+  options: { permanent?: boolean } = {},
+): Promise<boolean> {
+  const dead = options.permanent === true || job.attempts >= job.maxAttempts;
   const backoffSeconds = Math.min(300, 2 ** Math.min(job.attempts, 8));
   await db.query(
     `UPDATE arc_jobs

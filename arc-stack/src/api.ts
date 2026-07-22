@@ -6,9 +6,7 @@ import Fastify, { type FastifyRequest } from "fastify";
 import {
   erc20Abi,
   getAddress,
-  hashTypedData,
   isHex,
-  verifyTypedData,
   type Hex,
 } from "viem";
 import { authenticateBearer, createChallenge, exchangeChallengeForToken, operatorAuthorized } from "./auth.js";
@@ -16,28 +14,43 @@ import {
   arenaExchangeAbi,
   arcTestnet,
   createArcPublicClient,
+  hashArcCancel,
   hashArcOrder,
+  cancelTypes,
   orderDomain,
   orderTypes,
   transactionUrl,
+  type ArcCancel,
   type ArcOrder,
 } from "./chain.js";
 import { ARC_EXPLORER_URL, type ArcConfig } from "./config.js";
-import { createDatabase, databaseReady, migrateDatabase, type Database } from "./db.js";
+import { bindDatabaseToExchange, createDatabase, databaseReady, migrateDatabase, type Database } from "./db.js";
 import { enqueueJob } from "./jobs.js";
 import type { Logger } from "./logger.js";
 import { validateOrderableMarket, type OrderableMarketState } from "./market-policy.js";
 import { createMetrics } from "./metrics.js";
 import {
   CreateMarketSchema,
+  PrepareCancelSchema,
   PrepareOrderSchema,
   ResolveMarketSchema,
+  SubmitCancelSchema,
   SubmitOrderSchema,
+  createArcCancel,
   createArcOrder,
+  jsonCancel,
   jsonOrder,
   marketIdentifiers,
 } from "./schemas.js";
 import { readAgentDirectory, readOrderbook } from "./read-models.js";
+import { verifyWalletDigest } from "./signatures.js";
+import {
+  appendOrderEvent,
+  claimNonce,
+  createAcceptanceReceipt,
+  orderRequestHash,
+  readAcceptanceReceipt,
+} from "./order-intake.js";
 
 type ApiDependencies = { config: ArcConfig; logger: Logger; db?: Database };
 
@@ -66,6 +79,7 @@ export async function buildApi(dependencies: ApiDependencies) {
   const { config, logger } = dependencies;
   const db = dependencies.db ?? createDatabase(config);
   await migrateDatabase(db, logger);
+  if (config.exchangeAddress) await bindDatabaseToExchange(db, config.chainId, config.exchangeAddress);
   const publicClient = createArcPublicClient(config);
   const metrics = createMetrics("airarena-arc-api");
   const app = Fastify({
@@ -116,6 +130,13 @@ export async function buildApi(dependencies: ApiDependencies) {
       market_not_found: 404,
       market_not_open: 409,
       market_closed: 409,
+      nonce_digest_conflict: 409,
+      order_not_found: 404,
+      order_not_cancellable: 409,
+      order_batch_locked: 409,
+      cancellation_already_pending: 409,
+      invalid_order_hash: 400,
+      receipt_signer_unavailable: 503,
     };
     const status = name === "ZodError" ? 400 : statusByMessage[message] ?? 500;
     if (status === 500) logger.error({ requestId: request.id, err: error }, "http_request_failed");
@@ -226,7 +247,10 @@ export async function buildApi(dependencies: ApiDependencies) {
     async (request) => {
       const { wallet, nonce, signature } = request.body ?? {};
       if (!wallet || !nonce || !signature || !isHex(signature)) throw new Error("invalid_signature");
-      return { success: true, data: await exchangeChallengeForToken(db, config, { wallet, nonce, signature }) };
+      return {
+        success: true,
+        data: await exchangeChallengeForToken(db, config, { wallet, nonce, signature }, publicClient),
+      };
     },
   );
 
@@ -319,20 +343,23 @@ export async function buildApi(dependencies: ApiDependencies) {
     const parsed = SubmitOrderSchema.parse(request.body);
     if (getAddress(parsed.order.maker) !== agent.wallet) throw new Error("order_maker_mismatch");
     const order = parsed.order as ArcOrder;
-    const valid = await verifyTypedData({
-      address: agent.wallet,
-      domain: orderDomain(config.exchangeAddress),
-      types: orderTypes,
-      primaryType: "Order",
-      message: order,
-      signature: parsed.signature as Hex,
-    });
+    const orderHash = hashArcOrder(config.exchangeAddress, order);
+    const valid = await verifyWalletDigest(publicClient, agent.wallet, orderHash, parsed.signature as Hex);
     if (!valid) throw new Error("invalid_signature");
-    const orderHash = hashTypedData({
-      domain: orderDomain(config.exchangeAddress), types: orderTypes, primaryType: "Order", message: order,
-    });
     idempotencyKey(request);
     const key = `submit-order:${orderHash}`;
+    const existingReceipt = await readAcceptanceReceipt(db, orderHash);
+    if (existingReceipt) {
+      const existingJob = await db.query<{ id: string; status: string }>(
+        "SELECT id, status FROM arc_jobs WHERE idempotency_key = $1",
+        [key],
+      );
+      return reply.status(200).send({
+        success: true,
+        data: { orderHash, receipt: existingReceipt, job: existingJob.rows[0] ?? null },
+      });
+    }
+
     const client = await db.connect();
     try {
       await client.query("BEGIN");
@@ -341,7 +368,8 @@ export async function buildApi(dependencies: ApiDependencies) {
         [order.marketId],
       );
       validateOrderableMarket(market.rows[0], order.outcome);
-      await client.query(
+      await claimNonce(client, agent.wallet, "ORDER", order.nonce, orderHash);
+      const inserted = await client.query(
         `INSERT INTO arc_orders(
           order_hash, maker, market_id, outcome, side, price_ppm, quantity, nonce,
           expiry, client_order_id, signature, status
@@ -353,6 +381,37 @@ export async function buildApi(dependencies: ApiDependencies) {
           order.clientOrderId, parsed.signature,
         ],
       );
+      if ((inserted.rowCount ?? 0) === 0) {
+        const receipt = await readAcceptanceReceipt(client, orderHash);
+        if (!receipt) throw new Error("order_exists_without_receipt");
+        const existingJob = await client.query<{ id: string; status: string }>(
+          "SELECT id, status FROM arc_jobs WHERE idempotency_key = $1",
+          [key],
+        );
+        await client.query("COMMIT");
+        return reply.status(200).send({
+          success: true,
+          data: { orderHash, receipt, job: existingJob.rows[0] ?? null },
+        });
+      }
+
+      const requestHash = orderRequestHash(orderHash, parsed.signature as Hex);
+      const accepted = await appendOrderEvent(client, orderHash, "ORDER_ACCEPTED", {
+        maker: agent.wallet,
+        orderHash,
+        requestHash,
+      });
+      await client.query(
+        "UPDATE arc_orders SET accepted_sequence = $2 WHERE order_hash = $1",
+        [orderHash, accepted.sequence.toString()],
+      );
+      const receipt = await createAcceptanceReceipt(client, config, {
+        orderHash,
+        maker: agent.wallet,
+        sequence: accepted.sequence,
+        acceptedAt: accepted.occurredAt,
+        requestHash,
+      });
       const job = await enqueueJob(
         client,
         "SUBMIT_ORDER",
@@ -361,7 +420,7 @@ export async function buildApi(dependencies: ApiDependencies) {
         agent.wallet,
       );
       await client.query("COMMIT");
-      return reply.status(job.created ? 202 : 200).send({ success: true, data: { orderHash, job } });
+      return reply.status(job.created ? 202 : 200).send({ success: true, data: { orderHash, receipt, job } });
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
@@ -370,12 +429,151 @@ export async function buildApi(dependencies: ApiDependencies) {
     }
   });
 
+  app.post<{ Body: unknown }>("/v1/orders/cancellations/prepare", async (request) => {
+    if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+    const agent = await authenticateBearer(db, config, bearer(request), "orders:write");
+    const input = PrepareCancelSchema.parse(request.body);
+    const result = await db.query<{ maker: string; status: string }>(
+      "SELECT maker, status FROM arc_orders WHERE order_hash = $1",
+      [input.orderHash],
+    );
+    const order = result.rows[0];
+    if (!order) throw new Error("order_not_found");
+    if (getAddress(order.maker) !== agent.wallet) throw new Error("order_maker_mismatch");
+    if (!["QUEUED", "SUBMITTED", "ACTIVE", "CANCEL_PENDING"].includes(order.status)) {
+      if (order.status === "MATCHING") throw new Error("order_batch_locked");
+      throw new Error("order_not_cancellable");
+    }
+    const cancellation = createArcCancel(agent.wallet, input);
+    return {
+      success: true,
+      data: {
+        cancellation: jsonCancel(cancellation),
+        cancellationHash: hashArcCancel(config.exchangeAddress, cancellation),
+        typedData: serializeUnknown({
+          domain: orderDomain(config.exchangeAddress),
+          types: cancelTypes,
+          primaryType: "Cancel",
+          message: cancellation,
+        }),
+      },
+    };
+  });
+
+  app.post<{ Body: unknown }>("/v1/orders/cancellations/submit", async (request, reply) => {
+    if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+    const agent = await authenticateBearer(db, config, bearer(request), "orders:write");
+    const parsed = SubmitCancelSchema.parse(request.body);
+    const cancellation: ArcCancel = {
+      ...parsed.cancellation,
+      orderHash: parsed.cancellation.orderHash as Hex,
+    };
+    if (getAddress(cancellation.maker) !== agent.wallet) throw new Error("order_maker_mismatch");
+    const cancellationHash = hashArcCancel(config.exchangeAddress, cancellation);
+    if (!await verifyWalletDigest(publicClient, agent.wallet, cancellationHash, parsed.signature as Hex)) {
+      throw new Error("invalid_signature");
+    }
+    idempotencyKey(request);
+    const key = `cancel-order:${cancellationHash}`;
+    const existingJob = await db.query<{ id: string; status: string }>(
+      "SELECT id, status FROM arc_jobs WHERE idempotency_key = $1",
+      [key],
+    );
+    if (existingJob.rows[0]) {
+      return reply.status(200).send({
+        success: true,
+        data: { orderHash: cancellation.orderHash, cancellationHash, job: existingJob.rows[0] },
+      });
+    }
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const orderResult = await client.query<{
+        maker: string;
+        status: string;
+        assigned_batch_id: string | null;
+        cancellation_digest: string | null;
+      }>(
+        `SELECT maker, status, assigned_batch_id, cancellation_digest
+           FROM arc_orders WHERE order_hash = $1 FOR UPDATE`,
+        [cancellation.orderHash],
+      );
+      const order = orderResult.rows[0];
+      if (!order) throw new Error("order_not_found");
+      if (getAddress(order.maker) !== agent.wallet) throw new Error("order_maker_mismatch");
+      if (order.status === "MATCHING") throw new Error("order_batch_locked");
+      if (order.status === "CANCEL_PENDING" && order.cancellation_digest?.toLowerCase() !== cancellationHash.toLowerCase()) {
+        throw new Error("cancellation_already_pending");
+      }
+      if (!["QUEUED", "SUBMITTED", "ACTIVE", "CANCEL_PENDING"].includes(order.status)) {
+        throw new Error("order_not_cancellable");
+      }
+      await claimNonce(client, agent.wallet, "CANCEL", cancellation.nonce, cancellationHash);
+      if (order.status !== "CANCEL_PENDING") {
+        if (order.assigned_batch_id) {
+          await client.query(
+            `UPDATE arc_batch_orders SET released_at = clock_timestamp()
+              WHERE batch_id = $1 AND order_hash = $2 AND released_at IS NULL`,
+            [order.assigned_batch_id, cancellation.orderHash],
+          );
+        }
+        await client.query(
+          `UPDATE arc_orders
+              SET status = 'CANCEL_PENDING', cancellation_nonce = $2,
+                  cancellation_deadline = to_timestamp($3), cancellation_signature = $4,
+                  cancellation_digest = $5, assigned_batch_id = NULL, updated_at = now()
+            WHERE order_hash = $1`,
+          [
+            cancellation.orderHash,
+            cancellation.nonce.toString(),
+            cancellation.deadline.toString(),
+            parsed.signature,
+            cancellationHash,
+          ],
+        );
+        await appendOrderEvent(client, cancellation.orderHash, "ORDER_CANCEL_ACCEPTED", {
+          cancellationHash,
+          deadline: cancellation.deadline.toString(),
+          maker: agent.wallet,
+          nonce: cancellation.nonce.toString(),
+        });
+      }
+      const job = await enqueueJob(
+        client,
+        "CANCEL_ORDER",
+        { cancellation: jsonCancel(cancellation), signature: parsed.signature, cancellationHash },
+        key,
+        agent.wallet,
+      );
+      await client.query("COMMIT");
+      return reply.status(job.created ? 202 : 200).send({
+        success: true,
+        data: { orderHash: cancellation.orderHash, cancellationHash, job },
+      });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  });
+
+  app.get<{ Params: { orderHash: string } }>("/v1/orders/:orderHash/receipt", async (request) => {
+    const agent = await authenticateBearer(db, config, bearer(request), "orders:read");
+    if (!isHex(request.params.orderHash, { strict: true }) || request.params.orderHash.length !== 66) {
+      throw new Error("invalid_order_hash");
+    }
+    const receipt = await readAcceptanceReceipt(db, request.params.orderHash as Hex);
+    if (receipt && receipt.maker !== agent.wallet) throw new Error("order_maker_mismatch");
+    return { success: true, data: receipt };
+  });
+
   app.get<{ Querystring: { limit?: string } }>("/v1/orders", async (request) => {
     const agent = await authenticateBearer(db, config, bearer(request), "orders:read");
     const limit = Math.min(100, Math.max(1, Number(request.query.limit ?? 50) || 50));
     const result = await db.query(
       `SELECT order_hash, maker, market_id, outcome, side, price_ppm, quantity, filled_quantity, nonce, expiry,
-              client_order_id, status, tx_hash, created_at, updated_at
+              client_order_id, status, tx_hash, accepted_sequence, assigned_batch_id, created_at, updated_at
        FROM arc_orders WHERE maker = $1 ORDER BY created_at DESC LIMIT $2`,
       [agent.wallet, limit],
     );

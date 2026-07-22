@@ -11,7 +11,7 @@ const SOURCE_ID_PATTERN = /^[a-z][a-z0-9.-]{1,63}$/;
 const FIXTURE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const FIELD_PATH_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*$/;
 
-export const ARC_EXCHANGE_ADDRESS = getAddress("0xEad589fA1b8BE258F47D3601B0c39238A364139b");
+export const ARC_EXCHANGE_ADDRESS = getAddress("0x1457B0E54f697E9662E1678b74f545CFCe17e96a");
 export const ARC_MARKET_ID_HASH_DOMAIN = "air-arena/arc/market-id/v1\0";
 export const ARC_MARKET_SPEC_HASH_DOMAIN = "air-arena/arc/market-spec/v1\0";
 
@@ -155,7 +155,7 @@ export const ArcMarketSpecDraftSchema = z.object({
     network: z.literal("arc-testnet"),
     chainId: z.literal(ARC_CHAIN_ID),
     exchangeAddress: AddressSchema,
-    contractVersion: z.literal("arena-exchange-v1"),
+    contractVersion: z.literal("arena-exchange-v2"),
   }).strict(),
   marketNonce: Uint256StringSchema,
   category: z.literal("SPORTS"),

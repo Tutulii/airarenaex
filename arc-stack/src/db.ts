@@ -1,4 +1,6 @@
 import pg from "pg";
+import { readFileSync } from "node:fs";
+import { getAddress, type Address } from "viem";
 import type { ArcConfig } from "./config.js";
 import type { Logger } from "./logger.js";
 
@@ -225,6 +227,10 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
         ON arc_markets (oracle_source, oracle_reference);
     `,
   },
+  {
+    version: 6,
+    sql: readFileSync(new URL("../migrations/006_signed_intake_and_batch_clearing.sql", import.meta.url), "utf8"),
+  },
 ];
 
 export async function migrateDatabase(db: Database, logger: Logger): Promise<void> {
@@ -264,5 +270,33 @@ export async function databaseReady(db: Database): Promise<boolean> {
     return result.rows[0]?.ok === 1;
   } catch {
     return false;
+  }
+}
+
+/** Permanently binds this database ledger to one non-upgradeable exchange deployment. */
+export async function bindDatabaseToExchange(db: Database, chainId: number, exchangeAddress: Address): Promise<void> {
+  const address = getAddress(exchangeAddress);
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('airarena_arc_exchange_binding'))");
+    await client.query(
+      `INSERT INTO arc_deployment_binding(singleton, chain_id, exchange_address)
+       VALUES (true, $1, $2) ON CONFLICT (singleton) DO NOTHING`,
+      [chainId, address],
+    );
+    const binding = await client.query<{ chain_id: string; exchange_address: string }>(
+      "SELECT chain_id::text, exchange_address FROM arc_deployment_binding WHERE singleton = true",
+    );
+    const row = binding.rows[0];
+    if (!row || Number(row.chain_id) !== chainId || getAddress(row.exchange_address) !== address) {
+      throw new Error("database_exchange_binding_mismatch");
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
   }
 }

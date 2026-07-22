@@ -29,6 +29,28 @@ describe("Arc configuration boundary", () => {
         DATABASE_URL: "postgresql://localhost/arc",
       }),
     ).toThrow(/AUTH_TOKEN_PEPPER/);
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: "production",
+        SERVICE_ROLE: "api",
+        DATABASE_URL: "postgresql://localhost/arc",
+        AUTH_TOKEN_PEPPER: "p".repeat(32),
+      }),
+    ).toThrow(/ARC_RECEIPT_SIGNER_PRIVATE_KEY/);
     expect(loadConfig({ ...base, NODE_ENV: "production", SERVICE_ROLE: "mcp" }).serviceRole).toBe("mcp");
+  });
+
+  it("rejects configurations that would split one auction across transactions", () => {
+    expect(() => loadConfig({
+      ...base,
+      ARC_BATCH_MAX_ORDERS: "41",
+      ARC_BATCH_EXECUTION_CHUNK_SIZE: "40",
+    })).toThrow(/atomic execution/);
+    expect(loadConfig({
+      ...base,
+      ARC_BATCH_MAX_ORDERS: "40",
+      ARC_BATCH_EXECUTION_CHUNK_SIZE: "40",
+    }).batchMaxOrders).toBe(40);
   });
 });

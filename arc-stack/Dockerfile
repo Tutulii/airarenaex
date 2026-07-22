@@ -4,6 +4,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --include=dev
 COPY tsconfig.json ./
 COPY src ./src
+COPY migrations ./migrations
 RUN npm run build
 
 FROM node:22.22.0-bookworm-slim AS runtime
@@ -14,6 +15,7 @@ RUN groupadd --system --gid 1001 airarena \
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build --chown=airarena:airarena /app/dist ./dist
+COPY --from=build --chown=airarena:airarena /app/migrations ./migrations
 USER airarena
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

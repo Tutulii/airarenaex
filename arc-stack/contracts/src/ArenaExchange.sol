@@ -35,6 +35,8 @@ contract ArenaExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
     bytes32 public constant ORDER_TYPEHASH = keccak256(
         "Order(address maker,bytes32 marketId,uint8 outcome,bool isBuy,uint64 pricePpm,uint128 quantity,uint64 expiry,uint256 nonce,bytes32 clientOrderId)"
     );
+    bytes32 public constant CANCEL_TYPEHASH =
+        keccak256("Cancel(address maker,bytes32 orderHash,uint256 nonce,uint64 deadline)");
 
     enum MarketStatus {
         NONE,
@@ -76,6 +78,13 @@ contract ArenaExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
         uint256 reservedCollateral;
         uint128 reservedShares;
         OrderStatus status;
+    }
+
+    struct Cancel {
+        address maker;
+        bytes32 orderHash;
+        uint256 nonce;
+        uint64 deadline;
     }
 
     struct Match {
@@ -120,6 +129,7 @@ contract ArenaExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
         positions;
     mapping(bytes32 orderHash => StoredOrder order) private _orders;
     mapping(address maker => mapping(uint256 nonce => bool used)) public usedNonces;
+    mapping(address maker => mapping(uint256 nonce => bool used)) public usedCancellationNonces;
 
     event CollateralDeposited(address indexed account, uint256 amount);
     event CollateralWithdrawn(address indexed account, address indexed recipient, uint256 amount);
@@ -363,14 +373,33 @@ contract ArenaExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
         _assertSolvent();
     }
 
-    function cancelOrder(bytes32 orderHash) external {
+    function cancelOrder(bytes32 orderHash) external nonReentrant {
         StoredOrder storage stored = _orders[orderHash];
         if (stored.status != OrderStatus.ACTIVE) revert OrderNotActive();
         if (stored.order.maker != msg.sender) revert NotOrderMaker();
-        _releaseReservation(stored);
-        stored.status = OrderStatus.CANCELLED;
-        emit OrderCancelled(orderHash, msg.sender);
-        _assertSolvent();
+        _cancelOrder(stored, orderHash, msg.sender);
+    }
+
+    /// @notice Cancels an active order using a maker-authorized EIP-712 envelope.
+    /// @dev The caller is permissionless. Cancellation remains available while the exchange is paused.
+    function cancelOrderBySig(Cancel calldata cancellation, bytes calldata signature) external nonReentrant {
+        // forge-lint: disable-next-line(block-timestamp)
+        if (cancellation.maker == address(0) || cancellation.deadline < block.timestamp) {
+            revert InvalidOrder();
+        }
+        if (usedCancellationNonces[cancellation.maker][cancellation.nonce]) revert NonceAlreadyUsed();
+
+        StoredOrder storage stored = _orders[cancellation.orderHash];
+        if (stored.status != OrderStatus.ACTIVE) revert OrderNotActive();
+        if (stored.order.maker != cancellation.maker) revert NotOrderMaker();
+
+        bytes32 digest = hashCancel(cancellation);
+        if (!SignatureChecker.isValidSignatureNow(cancellation.maker, digest, signature)) {
+            revert InvalidSignature();
+        }
+
+        usedCancellationNonces[cancellation.maker][cancellation.nonce] = true;
+        _cancelOrder(stored, cancellation.orderHash, cancellation.maker);
     }
 
     function executeBatch(bytes32 marketId, uint8 outcome, uint64 clearingPricePpm, Match[] calldata matches_)
@@ -393,7 +422,8 @@ contract ArenaExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
                 matched.quantity == 0 || buy.status != OrderStatus.ACTIVE || sell.status != OrderStatus.ACTIVE
                     || !buy.order.isBuy || sell.order.isBuy || buy.order.marketId != marketId
                     || sell.order.marketId != marketId || buy.order.outcome != outcome
-                    || sell.order.outcome != outcome || clearingPricePpm > buy.order.pricePpm
+                    || sell.order.outcome != outcome || buy.order.maker == sell.order.maker
+                    || clearingPricePpm > buy.order.pricePpm
                     // forge-lint: disable-next-line(block-timestamp)
                     || clearingPricePpm < sell.order.pricePpm || block.timestamp >= buy.order.expiry
                     // forge-lint: disable-next-line(block-timestamp)
@@ -508,6 +538,20 @@ contract ArenaExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
         );
     }
 
+    function hashCancel(Cancel calldata cancellation) public view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    CANCEL_TYPEHASH,
+                    cancellation.maker,
+                    cancellation.orderHash,
+                    cancellation.nonce,
+                    cancellation.deadline
+                )
+            )
+        );
+    }
+
     function getOrder(bytes32 orderHash) external view returns (StoredOrder memory) {
         return _orders[orderHash];
     }
@@ -542,6 +586,13 @@ contract ArenaExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
                 positions[stored.order.marketId][stored.order.outcome][stored.order.maker] += release;
             }
         }
+    }
+
+    function _cancelOrder(StoredOrder storage stored, bytes32 orderHash, address maker) private {
+        _releaseReservation(stored);
+        stored.status = OrderStatus.CANCELLED;
+        emit OrderCancelled(orderHash, maker);
+        _assertSolvent();
     }
 
     function _assertSolvent() private view {

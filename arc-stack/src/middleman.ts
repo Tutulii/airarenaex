@@ -18,11 +18,27 @@ import {
   type ArcOrder,
 } from "./chain.js";
 import type { ArcConfig } from "./config.js";
-import { createDatabase, databaseReady, migrateDatabase, type Database } from "./db.js";
+import {
+  bindDatabaseToExchange,
+  createDatabase,
+  databaseReady,
+  migrateDatabase,
+  type Database,
+  type DatabaseClient,
+} from "./db.js";
 import { claimNextJob, completeJob, enqueueJob, failJob, recoverAbandonedJobs, type ArcJob } from "./jobs.js";
 import type { Logger } from "./logger.js";
 import { createMetrics } from "./metrics.js";
 import { resultWatcherReady, runResultWatcher } from "./settlement-watcher.js";
+import {
+  assignActiveOrderToBatch,
+  failAndReleaseBatch,
+  finalizeExecutedBatch,
+  loadPendingBatchChunks,
+  markBatchChunk,
+  sealNextBatch,
+} from "./batches.js";
+import { appendOrderEvent } from "./order-intake.js";
 
 const Hex32 = z.string().refine((value) => isHex(value, { strict: true }) && value.length === 66);
 const UintString = z.string().regex(/^(0|[1-9][0-9]*)$/);
@@ -40,6 +56,21 @@ const SubmitOrderPayload = z.object({
     nonce: UintString,
     clientOrderId: Hex32,
   }),
+});
+const CancelOrderPayload = z.object({
+  cancellationHash: Hex32,
+  signature: z.string().refine((value) => isHex(value, { strict: true })),
+  cancellation: z.object({
+    maker: z.string(),
+    orderHash: Hex32,
+    nonce: UintString,
+    deadline: UintString,
+  }),
+});
+const ExecuteBatchPayload = z.object({
+  batchId: Hex32,
+  fencingToken: UintString,
+  resultHash: Hex32,
 });
 const CreateMarketPayload = z.object({
   marketId: Hex32,
@@ -106,6 +137,118 @@ async function projectExecutedMatch(db: Database, job: ArcJob, payload: z.infer<
      WHERE order_hash = $1 AND match_job_id = $3`,
     [payload.sellOrderHash, sellTarget.toString(), job.id],
   );
+}
+
+async function projectOrderChainActiveRecord(
+  db: DatabaseClient,
+  orderHash: Hex,
+  txHash?: Hex,
+): Promise<string | undefined> {
+  const updated = await db.query<{ status: string }>(
+    `UPDATE arc_orders
+        SET status = CASE WHEN status = 'CANCEL_PENDING' THEN status ELSE 'ACTIVE' END,
+            tx_hash = COALESCE($2, tx_hash), updated_at = clock_timestamp()
+      WHERE order_hash = $1 AND status IN ('QUEUED','SUBMITTED','ACTIVE','CANCEL_PENDING','REJECTED')
+      RETURNING status`,
+    [orderHash, txHash ?? null],
+  );
+  await db.query(
+    `UPDATE arc_nonce_claims SET state = 'CHAIN_ACTIVE', updated_at = clock_timestamp()
+      WHERE namespace = 'ORDER' AND digest = $1 AND state = 'ACCEPTED'`,
+    [orderHash],
+  );
+  await appendOrderEvent(db, orderHash, "ORDER_CHAIN_ACTIVE", { status: "ACTIVE" });
+  return updated.rows[0]?.status;
+}
+
+async function projectOrderChainActive(
+  db: Database,
+  config: ArcConfig,
+  orderHash: Hex,
+  txHash?: Hex,
+): Promise<void> {
+  const client = await db.connect();
+  let status: string | undefined;
+  try {
+    await client.query("BEGIN");
+    status = await projectOrderChainActiveRecord(client, orderHash, txHash);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  if (status === "ACTIVE") await assignActiveOrderToBatch(db, config, orderHash);
+}
+
+async function projectOrderCancelledRecord(db: DatabaseClient, orderHash: Hex): Promise<void> {
+  const current = await db.query<{ assigned_batch_id: Hex | null }>(
+    "SELECT assigned_batch_id FROM arc_orders WHERE order_hash = $1 FOR UPDATE",
+    [orderHash],
+  );
+  const batchId = current.rows[0]?.assigned_batch_id;
+  if (batchId) {
+    await db.query(
+      `UPDATE arc_batch_orders SET released_at = clock_timestamp()
+        WHERE batch_id = $1 AND order_hash = $2 AND released_at IS NULL`,
+      [batchId, orderHash],
+    );
+  }
+  await db.query(
+    `UPDATE arc_orders SET status = 'CANCELLED', match_job_id = NULL,
+            assigned_batch_id = NULL, updated_at = clock_timestamp()
+      WHERE order_hash = $1`,
+    [orderHash],
+  );
+  await db.query(
+    `UPDATE arc_nonce_claims SET state = 'CONSUMED', updated_at = clock_timestamp()
+      WHERE namespace = 'CANCEL'
+        AND digest = (SELECT cancellation_digest FROM arc_orders WHERE order_hash = $1)
+        AND state IN ('ACCEPTED','CHAIN_ACTIVE')`,
+    [orderHash],
+  );
+  await appendOrderEvent(db, orderHash, "ORDER_CANCELLED", { status: "CANCELLED" });
+}
+
+async function projectOrderCancelled(db: Database, orderHash: Hex): Promise<void> {
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await projectOrderCancelledRecord(client, orderHash);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function rejectUnsubmittedOrder(db: Database, orderHash: Hex, reason: string): Promise<void> {
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const updated = await client.query(
+      `UPDATE arc_orders SET status = 'REJECTED', updated_at = clock_timestamp()
+        WHERE order_hash = $1 AND status IN ('QUEUED','SUBMITTED')`,
+      [orderHash],
+    );
+    if ((updated.rowCount ?? 0) > 0) {
+      await client.query(
+        `UPDATE arc_nonce_claims SET state = 'REJECTED', updated_at = clock_timestamp()
+          WHERE namespace = 'ORDER' AND digest = $1 AND state = 'ACCEPTED'`,
+        [orderHash],
+      );
+      await appendOrderEvent(client, orderHash, "ORDER_REJECTED", { reason: reason.slice(0, 256) });
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function scheduleCrossingMatch(db: Database): Promise<boolean> {
@@ -180,6 +323,151 @@ async function scheduleCrossingMatch(db: Database): Promise<boolean> {
   }
 }
 
+async function executePersistedBatch(
+  job: ArcJob,
+  config: ArcConfig,
+  db: Database,
+  logger: Logger,
+): Promise<Hex | null> {
+  if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+  const payload = ExecuteBatchPayload.parse(job.payload);
+  const committed = await db.query<{ result_hash: string; status: string }>(
+    "SELECT result_hash, status FROM arc_batches WHERE batch_id = $1 AND fencing_token = $2",
+    [payload.batchId, payload.fencingToken],
+  );
+  const batchState = committed.rows[0];
+  if (batchState?.result_hash.toLowerCase() !== payload.resultHash.toLowerCase()) {
+    throw new Error("batch_result_commitment_mismatch");
+  }
+  if (batchState.status === "EXECUTED") {
+    logger.warn({ batchId: payload.batchId, jobId: job.id }, "arc_batch_job_recovered_after_finalization");
+    return null;
+  }
+  if (batchState.status !== "EXECUTING") throw new Error(`batch_not_executable:${batchState.status}`);
+  const publicClient = createArcPublicClient(config);
+  const walletClient = createArcWalletClient(config, config.matcherPrivateKey);
+  const account = walletClient.account;
+  if (!account) throw new Error("matcher_account_unavailable");
+  const chunks = await loadPendingBatchChunks(db, payload.batchId as Hex, BigInt(payload.fencingToken));
+  if (chunks.length > 1 || (chunks[0] && chunks[0].chunkIndex !== 0)) {
+    throw new Error("non_atomic_batch_execution_rejected");
+  }
+  let lastHash: Hex | null = null;
+
+  for (const chunk of chunks) {
+    await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "RUNNING");
+    try {
+      const bounds = new Map<string, { hash: Hex; before: bigint; after: bigint }>();
+      for (const fill of chunk.fills) {
+        for (const [hash, before] of [
+          [fill.buyOrderHash, fill.buyFilledBefore],
+          [fill.sellOrderHash, fill.sellFilledBefore],
+        ] as const) {
+          const key = hash.toLowerCase();
+          const after = before + fill.quantity;
+          const existing = bounds.get(key);
+          bounds.set(key, {
+            hash,
+            before: existing && existing.before < before ? existing.before : before,
+            after: existing && existing.after > after ? existing.after : after,
+          });
+        }
+      }
+      const states = await Promise.all([...bounds.values()].map(async (bound) => ({
+        bound,
+        stored: await publicClient.readContract({
+          address: config.exchangeAddress!,
+          abi: arenaExchangeAbi,
+          functionName: "getOrder",
+          args: [bound.hash],
+        }),
+      })));
+      if (states.every(({ bound, stored }) => stored.filledQuantity >= bound.after)) {
+        await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "SUCCEEDED");
+        logger.warn({ batchId: chunk.batchId, chunkIndex: chunk.chunkIndex }, "arc_batch_chunk_recovered_from_chain");
+        continue;
+      }
+      if (states.some(({ bound, stored }) => stored.filledQuantity !== bound.before || Number(stored.status) !== 1)) {
+        throw new Error("batch_chunk_prestate_changed");
+      }
+      const simulation = await publicClient.simulateContract({
+        account,
+        address: config.exchangeAddress,
+        abi: arenaExchangeAbi,
+        functionName: "executeBatch",
+        args: [
+          chunk.marketId,
+          chunk.outcome,
+          chunk.clearingPricePpm,
+          chunk.fills.map((fill) => ({
+            buyOrderHash: fill.buyOrderHash,
+            sellOrderHash: fill.sellOrderHash,
+            quantity: fill.quantity,
+          })),
+        ],
+      });
+      const hash = await walletClient.writeContract(simulation.request);
+      const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1, timeout: 30_000 });
+      if (receipt.status !== "success") throw new Error(`transaction_reverted:${hash}`);
+      lastHash = hash;
+      await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "SUCCEEDED", hash);
+      logger.info({
+        batchId: chunk.batchId,
+        chunkIndex: chunk.chunkIndex,
+        txHash: hash,
+        explorerUrl: transactionUrl(hash),
+      }, "arc_batch_chunk_confirmed");
+    } catch (error) {
+      await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "FAILED", undefined, errorMessage(error));
+      throw error;
+    }
+  }
+
+  const active = await finalizeExecutedBatch(db, payload.batchId as Hex, job.id);
+  for (const orderHash of active) await assignActiveOrderToBatch(db, config, orderHash);
+  return lastHash;
+}
+
+async function reconcileFailedBatch(
+  db: Database,
+  config: ArcConfig,
+  job: ArcJob,
+  payload: z.infer<typeof ExecuteBatchPayload>,
+  reason: string,
+): Promise<void> {
+  if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+  const orders = await db.query<{ order_hash: Hex }>(
+    `SELECT order_hash FROM arc_orders
+      WHERE assigned_batch_id = $1 AND match_job_id = $2 ORDER BY order_hash`,
+    [payload.batchId, job.id],
+  );
+  const publicClient = createArcPublicClient(config);
+  const chainStates = await Promise.all(orders.rows.map(async ({ order_hash: orderHash }) => {
+    const stored = await publicClient.readContract({
+      address: config.exchangeAddress!,
+      abi: arenaExchangeAbi,
+      functionName: "getOrder",
+      args: [orderHash],
+    });
+    const status = Number(stored.status);
+    if (status < 1 || status > 3) throw new Error(`batch_order_chain_state_invalid:${orderHash}:${status}`);
+    return {
+      orderHash,
+      status: (["", "ACTIVE", "FILLED", "CANCELLED"] as const)[status] as "ACTIVE" | "FILLED" | "CANCELLED",
+      filledQuantity: stored.filledQuantity,
+    };
+  }));
+  const active = await failAndReleaseBatch(
+    db,
+    payload.batchId as Hex,
+    BigInt(payload.fencingToken),
+    job.id,
+    chainStates,
+    reason,
+  );
+  for (const orderHash of active) await assignActiveOrderToBatch(db, config, orderHash);
+}
+
 async function sendContractTransaction(
   job: ArcJob,
   config: ArcConfig,
@@ -187,6 +475,7 @@ async function sendContractTransaction(
   logger: Logger,
 ): Promise<Hex | null> {
   if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+  if (job.kind === "EXECUTE_BATCH") return executePersistedBatch(job, config, db, logger);
   const publicClient = createArcPublicClient(config);
   const signerKey = job.kind === "CREATE_MARKET"
     ? config.marketAdminPrivateKey
@@ -199,7 +488,7 @@ async function sendContractTransaction(
   const account = walletClient.account;
   if (!account) throw new Error("relayer_account_unavailable");
 
-  let hash: Hex;
+  let hash: Hex | undefined;
   switch (job.kind) {
     case "SUBMIT_ORDER": {
       const payload = SubmitOrderPayload.parse(job.payload);
@@ -211,10 +500,16 @@ async function sendContractTransaction(
       });
       if (Number(stored.status) !== 0) {
         const recoveredStatus = ["NONE", "ACTIVE", "FILLED", "CANCELLED"][Number(stored.status)] ?? "SUBMITTED";
-        await db.query(
-          "UPDATE arc_orders SET status = $2, updated_at = now() WHERE order_hash = $1",
-          [payload.orderHash, recoveredStatus],
-        );
+        if (recoveredStatus === "ACTIVE") {
+          await projectOrderChainActive(db, config, payload.orderHash as Hex);
+        } else if (recoveredStatus === "CANCELLED") {
+          await projectOrderCancelled(db, payload.orderHash as Hex);
+        } else {
+          await db.query(
+            "UPDATE arc_orders SET status = $2, updated_at = now() WHERE order_hash = $1",
+            [payload.orderHash, recoveredStatus],
+          );
+        }
         logger.warn({ jobId: job.id, orderHash: payload.orderHash, recoveredStatus }, "arc_job_recovered_from_chain_state");
         return null;
       }
@@ -235,6 +530,37 @@ async function sendContractTransaction(
         abi: arenaExchangeAbi,
         functionName: "submitOrder",
         args: [order, payload.signature as Hex],
+      });
+      hash = await walletClient.writeContract(simulation.request);
+      break;
+    }
+    case "CANCEL_ORDER": {
+      const payload = CancelOrderPayload.parse(job.payload);
+      const stored = await publicClient.readContract({
+        address: config.exchangeAddress,
+        abi: arenaExchangeAbi,
+        functionName: "getOrder",
+        args: [payload.cancellation.orderHash as Hex],
+      });
+      if (Number(stored.status) === 3) {
+        await projectOrderCancelled(db, payload.cancellation.orderHash as Hex);
+        logger.warn({ jobId: job.id, orderHash: payload.cancellation.orderHash }, "arc_job_recovered_from_chain_state");
+        return null;
+      }
+      if (Number(stored.status) === 0) throw new Error("cancel_order_waiting_for_chain_activation");
+      if (Number(stored.status) === 2) throw new Error("cancel_order_already_filled");
+      if (Number(stored.status) !== 1) throw new Error("cancel_order_not_active");
+      const simulation = await publicClient.simulateContract({
+        account,
+        address: config.exchangeAddress,
+        abi: arenaExchangeAbi,
+        functionName: "cancelOrderBySig",
+        args: [{
+          maker: getAddress(payload.cancellation.maker),
+          orderHash: payload.cancellation.orderHash as Hex,
+          nonce: BigInt(payload.cancellation.nonce),
+          deadline: BigInt(payload.cancellation.deadline),
+        }, payload.signature as Hex],
       });
       hash = await walletClient.writeContract(simulation.request);
       break;
@@ -378,16 +704,17 @@ async function sendContractTransaction(
     }
   }
 
+  if (!hash) throw new Error("transaction_not_created");
   const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1, timeout: 30_000 });
   if (receipt.status !== "success") throw new Error(`transaction_reverted:${hash}`);
   logger.info({ jobId: job.id, kind: job.kind, txHash: hash, explorerUrl: transactionUrl(hash) }, "arc_job_transaction_confirmed");
 
   if (job.kind === "SUBMIT_ORDER") {
     const payload = SubmitOrderPayload.parse(job.payload);
-    await db.query(
-      "UPDATE arc_orders SET status = 'ACTIVE', tx_hash = $2, updated_at = now() WHERE order_hash = $1",
-      [payload.orderHash, hash],
-    );
+    await projectOrderChainActive(db, config, payload.orderHash as Hex, hash);
+  } else if (job.kind === "CANCEL_ORDER") {
+    const payload = CancelOrderPayload.parse(job.payload);
+    await projectOrderCancelled(db, payload.cancellation.orderHash as Hex);
   } else if (job.kind === "EXECUTE_MATCH") {
     await projectExecutedMatch(db, job, ExecuteMatchPayload.parse(job.payload));
   } else if (job.kind === "CREATE_MARKET") {
@@ -430,7 +757,17 @@ async function processJobs(
     try {
       job = await claimNextJob(db, workerId);
       if (!job) {
-        if (await scheduleCrossingMatch(db)) continue;
+        if (config.clearingMode === "batch_v1") {
+          const sealed = await sealNextBatch(db, config, workerId);
+          if (sealed) {
+            for (const orderHash of sealed.releasedOrderHashes) {
+              await assignActiveOrderToBatch(db, config, orderHash);
+            }
+            continue;
+          }
+        } else if (await scheduleCrossingMatch(db)) {
+          continue;
+        }
         await new Promise((resolve) => setTimeout(resolve, config.jobPollIntervalMs));
         continue;
       }
@@ -441,7 +778,10 @@ async function processJobs(
     } catch (error) {
       logger.error({ err: error, jobId: job?.id, kind: job?.kind }, "arc_job_failed");
       if (job) {
-        const dead = await failJob(db, job, errorMessage(error)).catch((failure) => {
+        const message = errorMessage(error);
+        const permanentBatchFailure = job.kind === "EXECUTE_BATCH"
+          && message === "batch_chunk_prestate_changed";
+        const dead = await failJob(db, job, message, { permanent: permanentBatchFailure }).catch((failure) => {
           logger.fatal({ err: failure, jobId: job?.id }, "arc_job_failure_state_write_failed");
           return false;
         });
@@ -451,6 +791,20 @@ async function processJobs(
              WHERE match_job_id = $1 AND status = 'MATCHING'`,
             [job.id],
           ).catch((failure) => logger.error({ err: failure, jobId: job?.id }, "arc_match_release_failed"));
+        } else if (dead && job.kind === "SUBMIT_ORDER") {
+          const payload = SubmitOrderPayload.safeParse(job.payload);
+          if (payload.success) {
+            await rejectUnsubmittedOrder(db, payload.data.orderHash as Hex, errorMessage(error)).catch((failure) =>
+              logger.error({ err: failure, jobId: job?.id }, "arc_order_rejection_projection_failed"),
+            );
+          }
+        } else if (dead && job.kind === "EXECUTE_BATCH") {
+          const payload = ExecuteBatchPayload.safeParse(job.payload);
+          if (payload.success) {
+            await reconcileFailedBatch(db, config, job, payload.data, message).catch((failure) =>
+              logger.error({ err: failure, jobId: job?.id }, "arc_batch_failure_reconciliation_failed"),
+            );
+          }
         }
         metrics.jobsProcessed.inc({ kind: job.kind, result: "failure" });
       }
@@ -459,7 +813,12 @@ async function processJobs(
   }
 }
 
-async function applyIndexedEvent(db: Database, eventName: string, args: Record<string, unknown>, txHash: Hex) {
+async function applyIndexedEvent(
+  db: DatabaseClient,
+  eventName: string,
+  args: Record<string, unknown>,
+  txHash: Hex,
+): Promise<Hex | null> {
   if (eventName === "MarketCreated") {
     await db.query(
       `UPDATE arc_markets SET status = 'OPEN', create_tx_hash = COALESCE(create_tx_hash, $2), updated_at = now()
@@ -479,32 +838,39 @@ async function applyIndexedEvent(db: Database, eventName: string, args: Record<s
       [args.marketId, txHash],
     );
   } else if (eventName === "OrderSubmitted") {
-    await db.query(
-      `UPDATE arc_orders SET status = 'ACTIVE', tx_hash = COALESCE(tx_hash, $2), updated_at = now()
-       WHERE order_hash = $1`,
-      [args.orderHash, txHash],
-    );
+    const orderHash = args.orderHash as Hex;
+    const status = await projectOrderChainActiveRecord(db, orderHash, txHash);
+    return status === "ACTIVE" ? orderHash : null;
   } else if (eventName === "OrderCancelled") {
-    await db.query(
-      `UPDATE arc_orders SET status = 'CANCELLED', match_job_id = NULL, updated_at = now()
-       WHERE order_hash = $1`,
-      [args.orderHash],
-    );
+    await projectOrderCancelledRecord(db, args.orderHash as Hex);
   }
+  return null;
 }
 
-async function persistLog(db: Database, log: Log, eventName: string, args: Record<string, unknown>): Promise<void> {
+async function persistLog(db: Database, config: ArcConfig, log: Log, eventName: string, args: Record<string, unknown>): Promise<void> {
   const txHash = log.transactionHash;
   const blockHash = log.blockHash;
   const blockNumber = log.blockNumber;
   if (!txHash || !blockHash || blockNumber === null || log.logIndex === null) return;
-  const result = await db.query(
-    `INSERT INTO arc_chain_events(tx_hash, log_index, block_number, block_hash, event_name, payload)
-     VALUES ($1,$2,$3,$4,$5,$6::jsonb)
-     ON CONFLICT (tx_hash, log_index) DO NOTHING`,
-    [txHash, log.logIndex, blockNumber.toString(), blockHash, eventName, JSON.stringify(serialize(args))],
-  );
-  if ((result.rowCount ?? 0) > 0) await applyIndexedEvent(db, eventName, args, txHash);
+  const client = await db.connect();
+  let orderToAssign: Hex | null = null;
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `INSERT INTO arc_chain_events(tx_hash, log_index, block_number, block_hash, event_name, payload)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+       ON CONFLICT (tx_hash, log_index) DO NOTHING`,
+      [txHash, log.logIndex, blockNumber.toString(), blockHash, eventName, JSON.stringify(serialize(args))],
+    );
+    if ((result.rowCount ?? 0) > 0) orderToAssign = await applyIndexedEvent(client, eventName, args, txHash);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  if (orderToAssign) await assignActiveOrderToBatch(db, config, orderToAssign);
 }
 
 async function runIndexer(
@@ -541,7 +907,7 @@ async function runIndexer(
           for (const log of logs) {
             try {
               const decoded = decodeEventLog({ abi: arenaExchangeAbi, data: log.data, topics: log.topics });
-              await persistLog(db, log, decoded.eventName, decoded.args as Record<string, unknown>);
+              await persistLog(db, config, log, decoded.eventName, decoded.args as Record<string, unknown>);
             } catch (error) {
               logger.debug({ err: error, txHash: log.transactionHash, logIndex: log.logIndex }, "arc_untracked_contract_event");
             }
@@ -571,6 +937,8 @@ async function runIndexer(
 export async function startMiddleman(config: ArcConfig, logger: Logger): Promise<void> {
   const db = createDatabase(config);
   await migrateDatabase(db, logger);
+  if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+  await bindDatabaseToExchange(db, config.chainId, config.exchangeAddress);
   const metrics = createMetrics("airarena-arc-middleman");
   const state: RuntimeState = {
     startedAt: new Date().toISOString(),

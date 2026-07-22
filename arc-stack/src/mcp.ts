@@ -28,6 +28,16 @@ const SubmitOrderInput = z.object({
   signature: z.string().refine((value) => isHex(value, { strict: true })),
   idempotencyKey: z.string().min(8).max(200),
 });
+const PrepareCancellationInput = z.object({
+  orderHash: Hex32,
+  nonce: UintString,
+  deadline: UintString,
+});
+const SubmitCancellationInput = z.object({
+  cancellation: z.record(z.string(), z.unknown()),
+  signature: z.string().refine((value) => isHex(value, { strict: true })),
+  idempotencyKey: z.string().min(8).max(200),
+});
 
 const COMMON_NETWORK_NOTE =
   "Arc Testnet only (chain ID 5042002). USDC application amounts use the six-decimal ERC-20 interface. Agents sign transactions with their own EVM wallet; this MCP never accepts private keys.";
@@ -149,11 +159,29 @@ export const ARC_MCP_TOOLS = [
   },
   {
     name: "airarena_arc_prepare_cancel_order",
-    description: "Prepare an onchain order-cancellation call for signing by the order maker.",
+    description: "Prepare an EIP-712 cancellation envelope for maker signing and permissionless relay.",
     inputSchema: {
       type: "object",
-      properties: { orderHash: { type: "string", description: "bytes32 EIP-712 order hash" } },
-      required: ["orderHash"],
+      properties: {
+        orderHash: { type: "string", description: "bytes32 EIP-712 order hash" },
+        nonce: { type: "string", description: "Cancellation-namespace nonce" },
+        deadline: { type: "string", description: "Unix timestamp seconds" },
+      },
+      required: ["orderHash", "nonce", "deadline"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "airarena_arc_submit_signed_cancellation",
+    description: "Submit a maker-signed EIP-712 cancellation to the durable Arc relayer queue.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cancellation: { type: "object" },
+        signature: { type: "string", description: "0x-prefixed EIP-712 signature" },
+        idempotencyKey: { type: "string", minLength: 8, maxLength: 200 },
+      },
+      required: ["cancellation", "signature", "idempotencyKey"],
       additionalProperties: false,
     },
   },
@@ -303,14 +331,19 @@ async function callTool(
       return apiRequest(config, request, `/v1/jobs/${encodeURIComponent(jobId)}`);
     }
     case "airarena_arc_prepare_cancel_order": {
-      const orderHash = Hex32.parse(args.orderHash) as Hex;
-      const net = await network(config, request);
-      const exchange = getAddress(String(net.exchangeAddress));
-      return transaction(
-        exchange,
-        encodeFunctionData({ abi: arenaExchangeAbi, functionName: "cancelOrder", args: [orderHash] }),
-        "Cancel the active order and release its remaining reservation",
-      );
+      const input = PrepareCancellationInput.parse(args);
+      return apiRequest(config, request, "/v1/orders/cancellations/prepare", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    }
+    case "airarena_arc_submit_signed_cancellation": {
+      const input = SubmitCancellationInput.parse(args);
+      return apiRequest(config, request, "/v1/orders/cancellations/submit", {
+        method: "POST",
+        headers: { "idempotency-key": input.idempotencyKey },
+        body: JSON.stringify({ cancellation: input.cancellation, signature: input.signature }),
+      });
     }
     case "airarena_arc_prepare_redeem": {
       const marketId = Hex32.parse(args.marketId) as Hex;

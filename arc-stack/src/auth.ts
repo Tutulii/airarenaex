@@ -1,7 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { getAddress, isAddress, verifyMessage, type Address } from "viem";
+import { getAddress, isAddress, type Address } from "viem";
 import type { ArcConfig } from "./config.js";
 import type { Database } from "./db.js";
+import { verifyWalletMessage, type SignaturePublicClient } from "./signatures.js";
 
 export type AuthenticatedAgent = { wallet: Address; scopes: string[]; tokenId: string };
 
@@ -42,6 +43,7 @@ export async function exchangeChallengeForToken(
   db: Database,
   config: Pick<ArcConfig, "authTokenPepper">,
   input: { wallet: string; nonce: string; signature: `0x${string}` },
+  publicClient: SignaturePublicClient,
 ): Promise<{ token: string; wallet: Address; scopes: string[] }> {
   if (!config.authTokenPepper) throw new Error("auth_token_issuer_unavailable");
   if (!isAddress(input.wallet)) throw new Error("invalid_wallet");
@@ -61,7 +63,7 @@ export async function exchangeChallengeForToken(
     ) {
       throw new Error("challenge_invalid_or_expired");
     }
-    const valid = await verifyMessage({ address: wallet, message: challenge.message, signature: input.signature });
+    const valid = await verifyWalletMessage(publicClient, wallet, challenge.message, input.signature);
     if (!valid) throw new Error("invalid_signature");
 
     const token = `airarena_arc_sk_${randomBytes(32).toString("base64url")}`;
