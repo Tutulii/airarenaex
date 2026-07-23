@@ -7,12 +7,35 @@ import {
   type Hex,
 } from "viem";
 import { BATCH_POLICY_VERSION, clearUniformPriceBatch, type ClearingOrder } from "./batch-clearing.js";
+import { buildPublicBatchBundle, type PublicBatchOrder } from "./batch-bundle.js";
+import { cancellationCutoffMs, cancellationWindowOpen } from "./cancellation-cutoff.js";
 import type { ArcConfig } from "./config.js";
 import type { Database } from "./db.js";
+import { appendExchangeEvent } from "./exchange-events.js";
 import { enqueueJob } from "./jobs.js";
-import { appendOrderEvent, canonicalJson } from "./order-intake.js";
+import { appendOrderEvent, canonicalJson, payloadHash } from "./order-intake.js";
 
 export const BATCH_POLICY_HASH = keccak256(stringToHex(BATCH_POLICY_VERSION));
+
+async function appendBatchEvent(
+  db: Parameters<typeof appendExchangeEvent>[0],
+  batchId: Hex,
+  eventType: string,
+  payload: unknown,
+  sourceRoot?: Hex | null,
+): Promise<void> {
+  const hashedPayload = payloadHash(payload);
+  const eventKey = payloadHash({ batchId: batchId.toLowerCase(), eventType, payloadHash: hashedPayload });
+  await appendExchangeEvent(db, {
+    topic: "BATCH",
+    entityId: batchId,
+    eventType,
+    payload,
+    eventKey,
+    payloadHash: hashedPayload,
+    sourceRoot: sourceRoot ?? null,
+  });
+}
 
 export function deterministicBatchId(
   chainId: number,
@@ -76,6 +99,9 @@ export async function assignActiveOrderToBatch(
     let batchId: Hex | null = null;
     for (let offset = 0; offset < 2; offset += 1) {
       const candidateStart = batchStartMs + BigInt(offset) * interval;
+      const candidateEnd = candidateStart + interval;
+      const candidateCutoff = cancellationCutoffMs(candidateEnd);
+      if (!cancellationWindowOpen(nowMs, candidateCutoff)) continue;
       const candidateId = deterministicBatchId(
         config.chainId,
         config.exchangeAddress,
@@ -85,8 +111,12 @@ export async function assignActiveOrderToBatch(
       );
       await client.query(
         `INSERT INTO arc_batches(
-           batch_id, market_id, outcome, policy_version, policy_hash, batch_start, batch_end, status
-         ) VALUES ($1,$2,$3,$4,$5,to_timestamp($6::numeric / 1000),to_timestamp($7::numeric / 1000),'OPEN')
+           batch_id, market_id, outcome, policy_version, policy_hash, batch_start, batch_end,
+           cancellation_cutoff, status
+         ) VALUES (
+           $1,$2,$3,$4,$5,to_timestamp($6::numeric / 1000),to_timestamp($7::numeric / 1000),
+           to_timestamp($8::numeric / 1000),'OPEN'
+         )
          ON CONFLICT (batch_id) DO NOTHING`,
         [
           candidateId,
@@ -95,14 +125,16 @@ export async function assignActiveOrderToBatch(
           BATCH_POLICY_VERSION,
           BATCH_POLICY_HASH,
           candidateStart.toString(),
-          (candidateStart + interval).toString(),
+          candidateEnd.toString(),
+          candidateCutoff.toString(),
         ],
       );
-      const open = await client.query<{ status: string }>(
-        "SELECT status FROM arc_batches WHERE batch_id = $1 FOR UPDATE",
+      const open = await client.query<{ status: string; before_cutoff: boolean }>(
+        `SELECT status, cancellation_cutoff > clock_timestamp() AS before_cutoff
+           FROM arc_batches WHERE batch_id = $1 FOR UPDATE`,
         [candidateId],
       );
-      if (open.rows[0]?.status !== "OPEN") continue;
+      if (open.rows[0]?.status !== "OPEN" || !open.rows[0].before_cutoff) continue;
       const capacity = await client.query<{ accepted: string }>(
         `SELECT count(*)::text AS accepted FROM arc_batch_orders WHERE batch_id = $1 AND released_at IS NULL`,
         [candidateId],
@@ -132,6 +164,7 @@ export async function assignActiveOrderToBatch(
     await appendOrderEvent(client, orderHash, "ORDER_BATCH_ASSIGNED", {
       batchId,
       batchStartMs: batchStartMs.toString(),
+      cancellationCutoffMs: cancellationCutoffMs(batchStartMs + interval).toString(),
       policyHash: BATCH_POLICY_HASH,
     });
     await client.query("COMMIT");
@@ -152,6 +185,10 @@ type BatchOrderRow = {
   quantity: string;
   filled_quantity: string;
   expiry_unix: string;
+  nonce: string;
+  client_order_id: Hex;
+  signature: Hex;
+  accepted_sequence: string;
 };
 
 export type SealedBatch = {
@@ -174,10 +211,12 @@ export async function sealNextBatch(
       outcome: number;
       fencing_token: string;
       cutoff_unix: string;
+      cancellation_cutoff_ms: string;
       market_orderable: boolean;
     }>(
       `SELECT b.batch_id, b.market_id, b.outcome, b.fencing_token::text,
               floor(extract(epoch FROM b.batch_end))::bigint::text AS cutoff_unix,
+              floor(extract(epoch FROM b.cancellation_cutoff) * 1000)::bigint::text AS cancellation_cutoff_ms,
               (m.status = 'OPEN' AND m.close_time > clock_timestamp()) AS market_orderable
          FROM arc_batches b JOIN arc_markets m ON m.market_id = b.market_id
         WHERE b.status = 'OPEN' AND b.batch_end <= clock_timestamp()
@@ -211,6 +250,7 @@ export async function sealNextBatch(
           reason: "MARKET_CLOSED",
         });
       }
+      await appendBatchEvent(client, batch.batch_id, "BATCH_ABORTED", { reason: "MARKET_CLOSED" });
       await client.query("COMMIT");
       return {
         batchId: batch.batch_id,
@@ -231,7 +271,8 @@ export async function sealNextBatch(
 
     const rows = await client.query<BatchOrderRow>(
       `SELECT o.order_hash, o.maker, o.side, o.price_ppm::text, o.quantity::text,
-              o.filled_quantity::text, floor(extract(epoch FROM o.expiry))::bigint::text AS expiry_unix
+              o.filled_quantity::text, floor(extract(epoch FROM o.expiry))::bigint::text AS expiry_unix,
+              o.nonce::text, o.client_order_id, o.signature, o.accepted_sequence::text
          FROM arc_batch_orders bo
          JOIN arc_orders o ON o.order_hash = bo.order_hash
         WHERE bo.batch_id = $1 AND bo.released_at IS NULL
@@ -250,7 +291,7 @@ export async function sealNextBatch(
       filledQuantity: BigInt(row.filled_quantity),
       expiryUnix: BigInt(row.expiry_unix),
     }));
-    const result = clearUniformPriceBatch(clearingOrders, BigInt(batch.cutoff_unix));
+    const result = clearUniformPriceBatch(clearingOrders, BigInt(batch.cutoff_unix), { batchId: batch.batch_id });
     if (result.fills.length > config.batchExecutionChunkSize) {
       throw new Error("batch_atomic_fill_limit_exceeded");
     }
@@ -268,6 +309,34 @@ export async function sealNextBatch(
       inputRoot: result.inputRoot,
       resultHash: result.resultHash,
     };
+    if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+    const publicOrders: PublicBatchOrder[] = rows.rows.map((row) => ({
+      orderHash: row.order_hash,
+      maker: getAddress(row.maker),
+      side: row.side,
+      pricePpm: BigInt(row.price_ppm),
+      quantity: BigInt(row.quantity),
+      filledQuantity: BigInt(row.filled_quantity),
+      expiryUnix: BigInt(row.expiry_unix),
+      nonce: BigInt(row.nonce),
+      clientOrderId: row.client_order_id,
+      signature: row.signature,
+      acceptedSequence: BigInt(row.accepted_sequence),
+    }));
+    const bundle = buildPublicBatchBundle({
+      batchId: batch.batch_id,
+      chainId: config.chainId,
+      exchangeAddress: config.exchangeAddress,
+      marketId: batch.market_id,
+      outcome: batch.outcome,
+      cutoffUnix: BigInt(batch.cutoff_unix),
+      cancellationCutoffUnixMs: BigInt(batch.cancellation_cutoff_ms),
+      policyHash: BATCH_POLICY_HASH,
+      orders: publicOrders,
+    });
+    if (bundle.inputRoot !== result.inputRoot || bundle.resultHash !== result.resultHash) {
+      throw new Error("batch_bundle_replay_mismatch");
+    }
     await client.query(
       `UPDATE arc_batches
           SET input_root = $2, result_hash = $3, clearing_price_ppm = $4,
@@ -286,6 +355,27 @@ export async function sealNextBatch(
         workerId,
       ],
     );
+    await client.query(
+      `INSERT INTO arc_batch_publications(
+         batch_id, schema_version, order_root, fill_root, bundle_hash, bundle
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+      [
+        batch.batch_id,
+        bundle.schemaVersion,
+        bundle.orderRoot,
+        bundle.fillRoot,
+        bundle.bundleHash,
+        canonicalJson(bundle),
+      ],
+    );
+    await appendBatchEvent(client, batch.batch_id, "BATCH_PUBLISHED", {
+      bundleHash: bundle.bundleHash,
+      executableQuantity: bundle.executableQuantity,
+      fillRoot: bundle.fillRoot,
+      inputRoot: bundle.inputRoot,
+      orderRoot: bundle.orderRoot,
+      resultHash: bundle.resultHash,
+    }, bundle.bundleHash);
 
     const participating = new Set<string>();
     const buyFilled = new Map<string, bigint>(rows.rows.map((row) => [row.order_hash.toLowerCase(), BigInt(row.filled_quantity)]));
@@ -349,6 +439,10 @@ export async function sealNextBatch(
       for (const orderHash of rows.rows.map((row) => row.order_hash)) {
         await appendOrderEvent(client, orderHash, "ORDER_BATCH_RELEASED", { batchId: batch.batch_id, reason: "NO_CROSS" });
       }
+      await appendBatchEvent(client, batch.batch_id, "BATCH_NO_CROSS", {
+        bundleHash: bundle.bundleHash,
+        resultHash: result.resultHash,
+      }, bundle.bundleHash);
       await client.query("COMMIT");
       return { batchId: batch.batch_id, executionJobCreated: false, releasedOrderHashes: rows.rows.map((row) => row.order_hash) };
     }
@@ -364,6 +458,10 @@ export async function sealNextBatch(
       { batchId: batch.batch_id, fencingToken: nextFence.toString(), resultHash: result.resultHash },
       `execute-batch:${batch.batch_id}:${result.resultHash}`,
     );
+    await appendBatchEvent(client, batch.batch_id, "BATCH_EXECUTION_QUEUED", {
+      executionJobId: job.id,
+      resultHash: result.resultHash,
+    }, bundle.bundleHash);
     await client.query(
       `UPDATE arc_batches SET status = 'EXECUTING', execution_job_id = $2, updated_at = clock_timestamp()
         WHERE batch_id = $1 AND fencing_token = $3`,
@@ -538,6 +636,14 @@ export async function finalizeExecutedBatch(db: Database, batchId: Hex, jobId: s
         WHERE batch_id = $1 AND status = 'EXECUTING'`,
       [batchId],
     );
+    const publication = await client.query<{ bundle_hash: Hex }>(
+      "SELECT bundle_hash FROM arc_batch_publications WHERE batch_id = $1",
+      [batchId],
+    );
+    await appendBatchEvent(client, batchId, "BATCH_EXECUTED", {
+      activeOrderHashes: active,
+      executionJobId: jobId,
+    }, publication.rows[0]?.bundle_hash ?? null);
     await client.query("COMMIT");
     return active;
   } catch (error) {
@@ -632,6 +738,14 @@ export async function failAndReleaseBatch(
         WHERE batch_id = $1 AND fencing_token = $2`,
       [batchId, fencingToken.toString()],
     );
+    const publication = await client.query<{ bundle_hash: Hex }>(
+      "SELECT bundle_hash FROM arc_batch_publications WHERE batch_id = $1",
+      [batchId],
+    );
+    await appendBatchEvent(client, batchId, "BATCH_FAILED", {
+      executionJobId: jobId,
+      reason: reason.slice(0, 2_000),
+    }, publication.rows[0]?.bundle_hash ?? null);
     await client.query("COMMIT");
     return active;
   } catch (error) {

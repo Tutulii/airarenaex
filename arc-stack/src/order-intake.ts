@@ -15,6 +15,7 @@ import {
 } from "./chain.js";
 import type { ArcConfig } from "./config.js";
 import type { Database, DatabaseClient } from "./db.js";
+import { appendExchangeEvent } from "./exchange-events.js";
 
 export type OrderEventType =
   | "LEGACY_IMPORTED"
@@ -118,6 +119,16 @@ export async function appendOrderEvent(
     );
   const row = existing.rows[0];
   if (!row) throw new Error("order_event_insert_failed");
+  await appendExchangeEvent(db, {
+    topic: "ORDER",
+    entityId: orderHash,
+    eventType,
+    payload: canonicalPayload,
+    eventKey,
+    payloadHash: hashedPayload,
+    sourceRoot: hashedPayload,
+    occurredAt: row.occurred_at,
+  });
   return { sequence: BigInt(row.sequence), occurredAt: row.occurred_at };
 }
 

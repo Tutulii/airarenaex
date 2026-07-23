@@ -318,6 +318,46 @@ contract ArenaExchangeTest is Test {
         assertTrue(exchange.isSolvent());
     }
 
+    function testFuzzPartialBatchNeverOverfillsOrCreatesNegativeAccounting(
+        uint16 rawBuyLots,
+        uint16 rawSellLots,
+        uint32 rawPrice
+    ) external {
+        uint128 lot = 10_000;
+        uint128 buyQuantity = uint128(bound(uint256(rawBuyLots), 1, 2_000)) * lot;
+        uint128 sellQuantity = uint128(bound(uint256(rawSellLots), 1, 2_000)) * lot;
+        uint128 fillQuantity = buyQuantity < sellQuantity ? buyQuantity : sellQuantity;
+        // A one-lot fill must produce at least one six-decimal collateral atom.
+        uint64 price = uint64(bound(uint256(rawPrice), 100, 999_999));
+
+        vm.prank(seller);
+        exchange.splitCompleteSet(marketId, 20 * UNIT);
+
+        ArenaExchange.Order memory buy = _order(buyer, true, 2, price, buyQuantity, 81, "fuzz-partial-buy");
+        ArenaExchange.Order memory sell =
+            _order(seller, false, 2, price, sellQuantity, 82, "fuzz-partial-sell");
+        bytes32 buyHash = exchange.hashOrder(buy);
+        bytes32 sellHash = exchange.hashOrder(sell);
+        exchange.submitOrder(buy, _signature(buyerKey, buyHash));
+        exchange.submitOrder(sell, _signature(sellerKey, sellHash));
+
+        ArenaExchange.Match[] memory matches_ = new ArenaExchange.Match[](1);
+        matches_[0] =
+            ArenaExchange.Match({ buyOrderHash: buyHash, sellOrderHash: sellHash, quantity: fillQuantity });
+        vm.prank(matcher);
+        exchange.executeBatch(marketId, 2, price, matches_);
+
+        ArenaExchange.StoredOrder memory storedBuy = exchange.getOrder(buyHash);
+        ArenaExchange.StoredOrder memory storedSell = exchange.getOrder(sellHash);
+        assertEq(storedBuy.filledQuantity, fillQuantity);
+        assertEq(storedSell.filledQuantity, fillQuantity);
+        assertLe(storedBuy.filledQuantity, storedBuy.order.quantity);
+        assertLe(storedSell.filledQuantity, storedSell.order.quantity);
+        assertEq(exchange.positions(marketId, 2, buyer), fillQuantity);
+        assertEq(usdc.balanceOf(address(exchange)), exchange.totalLiabilities());
+        assertTrue(exchange.isSolvent());
+    }
+
     function _deposit(address account, uint256 amount) internal {
         vm.startPrank(account);
         usdc.approve(address(exchange), amount);

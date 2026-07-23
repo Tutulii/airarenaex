@@ -1,4 +1,5 @@
 import { getAddress, type Address, type Hex } from "viem";
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { BATCH_POLICY_VERSION, clearUniformPriceBatch, type ClearingOrder } from "../src/batch-clearing.js";
 
@@ -60,15 +61,15 @@ describe("deterministic uniform-price batch clearing", () => {
     ];
     const result = clearUniformPriceBatch(orders, 1_900_000_000n);
     expect(BATCH_POLICY_VERSION).toBe(
-      "PRO_RATA_AT_CLEARING_PRICE_V1+ORDER_HASH_ASC_V1+LOT_10000_V1+FEASIBLE_MIDPOINT_V1",
+      "PRO_RATA_LARGEST_REMAINDER_V2+SELF_TRADE_NETTING_V1+PARTIAL_FILL_V1+LOT_10000_V1+FEASIBLE_MIDPOINT_V1",
     );
     expect(result.clearingPricePpm).toBe(525_000n);
     expect(result.executableQuantity).toBe(14n * LOT);
     expect(result.fills.length).toBeGreaterThan(1);
     const filled = totals(result);
     expect(filled.get(hash(1))).toBe(7n * LOT);
-    expect(filled.get(hash(2))).toBe(4n * LOT);
-    expect(filled.get(hash(3))).toBe(3n * LOT);
+    expect(filled.get(hash(2))).toBe(3n * LOT);
+    expect(filled.get(hash(3))).toBe(4n * LOT);
     expect(filled.get(hash(4))).toBe(6n * LOT);
     expect(filled.get(hash(5))).toBe(8n * LOT);
   });
@@ -87,7 +88,7 @@ describe("deterministic uniform-price batch clearing", () => {
     expect(reverse.resultHash).toBe(forward.resultHash);
   });
 
-  it("never crosses the same maker and still finds the maximum cross-maker volume", () => {
+  it("nets a maker's crossing interest before price discovery and never self-trades", () => {
     const orders = [
       order(20, 1, "BUY", 700_000n, 10n),
       order(21, 2, "BUY", 700_000n, 4n),
@@ -95,7 +96,7 @@ describe("deterministic uniform-price batch clearing", () => {
       order(23, 3, "SELL", 300_000n, 3n),
     ];
     const result = clearUniformPriceBatch(orders, 1_900_000_000n);
-    expect(result.executableQuantity).toBe(7n * LOT);
+    expect(result.executableQuantity).toBe(3n * LOT);
     for (const fill of result.fills) {
       const buy = orders.find((candidate) => candidate.orderHash === fill.buyOrderHash)!;
       const sell = orders.find((candidate) => candidate.orderHash === fill.sellOrderHash)!;
@@ -126,7 +127,7 @@ describe("deterministic uniform-price batch clearing", () => {
     expect(result.resultHash).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
-  it("does not choose a midpoint between disjoint maximum-volume peaks", () => {
+  it("chooses a feasible midpoint after wallet-level netting", () => {
     const result = clearUniformPriceBatch([
       order(50, 3, "BUY", 386_000n, 5n),
       order(51, 3, "BUY", 293_000n, 9n),
@@ -136,8 +137,25 @@ describe("deterministic uniform-price batch clearing", () => {
       order(55, 2, "SELL", 601_000n, 13n),
       order(56, 5, "BUY", 617_000n, 4n),
     ], 1_900_000_000n);
-    expect(result.clearingPricePpm).toBe(172_000n);
-    expect(result.executableQuantity).toBe(15n * LOT);
+    expect(result.clearingPricePpm).toBe(386_500n);
+    expect(result.executableQuantity).toBe(11n * LOT);
+  });
+
+  it("allocates every integer remainder atom exactly once and deterministically", () => {
+    const orders = [
+      order(70, 1, "BUY", 600_000n, 2n),
+      order(71, 2, "BUY", 600_000n, 2n),
+      order(72, 3, "BUY", 600_000n, 2n),
+      order(73, 4, "SELL", 400_000n, 4n),
+    ];
+    const batchId = hash(900);
+    const first = clearUniformPriceBatch(orders, 1_900_000_000n, { batchId });
+    const second = clearUniformPriceBatch([...orders].reverse(), 1_900_000_000n, { batchId });
+    expect(second).toEqual(first);
+    const filled = totals(first);
+    expect([filled.get(hash(70)), filled.get(hash(71)), filled.get(hash(72))].sort())
+      .toEqual([LOT, LOT, 2n * LOT]);
+    expect(first.executableQuantity).toBe(4n * LOT);
   });
 
   it("preserves deterministic, lot-sized, no-self invariants across seeded order books", () => {
@@ -170,6 +188,61 @@ describe("deterministic uniform-price batch clearing", () => {
       }
       const buyTotal = result.fills.reduce((sum, fill) => sum + fill.quantity, 0n);
       expect(buyTotal).toBe(result.executableQuantity);
+      const makerSides = new Map<string, Set<string>>();
+      for (const fill of result.fills) {
+        const buy = orders.find((candidate) => candidate.orderHash === fill.buyOrderHash)!;
+        const sell = orders.find((candidate) => candidate.orderHash === fill.sellOrderHash)!;
+        const buySides = makerSides.get(buy.maker) ?? new Set<string>();
+        buySides.add("BUY");
+        makerSides.set(buy.maker, buySides);
+        const sellSides = makerSides.get(sell.maker) ?? new Set<string>();
+        sellSides.add("SELL");
+        makerSides.set(sell.maker, sellSides);
+      }
+      expect([...makerSides.values()].every((sides) => sides.size === 1)).toBe(true);
     }
-  });
+  }, 30_000);
+
+  it("satisfies no-overfill, non-negative, remainder, and netting properties under fuzzed books", () => {
+    fc.assert(fc.property(
+      fc.array(fc.record({
+        maker: fc.integer({ min: 1, max: 8 }),
+        side: fc.constantFrom<"BUY" | "SELL">("BUY", "SELL"),
+        price: fc.integer({ min: 1, max: 999 }),
+        lots: fc.integer({ min: 1, max: 80 }),
+        filled: fc.integer({ min: 0, max: 79 }),
+      }), { minLength: 2, maxLength: 32 }),
+      (specs) => {
+        const orders = specs.map((spec, index) => {
+          const quantityLots = BigInt(spec.lots);
+          const filledLots = BigInt(Math.min(spec.filled, spec.lots));
+          return order(index + 10_000, spec.maker, spec.side, BigInt(spec.price) * 1_000n, quantityLots, {
+            filledQuantity: filledLots * LOT,
+          });
+        });
+        const result = clearUniformPriceBatch(orders, 1_900_000_000n, { batchId: hash(901) });
+        const filled = totals(result);
+        for (const candidate of orders) {
+          const executed = filled.get(candidate.orderHash) ?? 0n;
+          expect(executed).toBeGreaterThanOrEqual(0n);
+          expect(executed).toBeLessThanOrEqual(candidate.quantity - candidate.filledQuantity);
+        }
+        const perMaker = new Map<string, Set<string>>();
+        for (const fill of result.fills) {
+          expect(fill.quantity).toBeGreaterThan(0n);
+          expect(fill.quantity % LOT).toBe(0n);
+          const buy = orders.find((candidate) => candidate.orderHash === fill.buyOrderHash)!;
+          const sell = orders.find((candidate) => candidate.orderHash === fill.sellOrderHash)!;
+          const buySides = perMaker.get(buy.maker) ?? new Set<string>();
+          buySides.add("BUY");
+          perMaker.set(buy.maker, buySides);
+          const sellSides = perMaker.get(sell.maker) ?? new Set<string>();
+          sellSides.add("SELL");
+          perMaker.set(sell.maker, sellSides);
+        }
+        expect([...perMaker.values()].every((sides) => sides.size <= 1)).toBe(true);
+        expect(result.fills.reduce((sum, fill) => sum + fill.quantity, 0n)).toBe(result.executableQuantity);
+      },
+    ), { numRuns: 500, endOnFailure: true });
+  }, 30_000);
 });

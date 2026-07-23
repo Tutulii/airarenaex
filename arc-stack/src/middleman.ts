@@ -38,7 +38,8 @@ import {
   markBatchChunk,
   sealNextBatch,
 } from "./batches.js";
-import { appendOrderEvent } from "./order-intake.js";
+import { appendExchangeEvent } from "./exchange-events.js";
+import { appendOrderEvent, payloadHash } from "./order-intake.js";
 
 const Hex32 = z.string().refine((value) => isHex(value, { strict: true }) && value.length === 66);
 const UintString = z.string().regex(/^(0|[1-9][0-9]*)$/);
@@ -818,31 +819,65 @@ async function applyIndexedEvent(
   eventName: string,
   args: Record<string, unknown>,
   txHash: Hex,
+  eventKey: Hex,
 ): Promise<Hex | null> {
+  let marketEvent: { marketId: string; eventType: string; payload: Record<string, unknown> } | null = null;
   if (eventName === "MarketCreated") {
     await db.query(
       `UPDATE arc_markets SET status = 'OPEN', create_tx_hash = COALESCE(create_tx_hash, $2), updated_at = now()
        WHERE market_id = $1`,
       [args.marketId, txHash],
     );
+    marketEvent = {
+      marketId: String(args.marketId),
+      eventType: "MARKET_OPENED",
+      payload: { marketId: String(args.marketId), status: "OPEN", transactionHash: txHash },
+    };
   } else if (eventName === "MarketResolved") {
     await db.query(
       `UPDATE arc_markets SET status = 'RESOLVED', winning_outcome = $2,
        resolution_tx_hash = COALESCE(resolution_tx_hash, $3), updated_at = now() WHERE market_id = $1`,
       [args.marketId, Number(args.winningOutcome), txHash],
     );
+    marketEvent = {
+      marketId: String(args.marketId),
+      eventType: "MARKET_RESOLVED",
+      payload: {
+        marketId: String(args.marketId),
+        status: "RESOLVED",
+        winningOutcome: Number(args.winningOutcome),
+        transactionHash: txHash,
+      },
+    };
   } else if (eventName === "MarketInvalidated") {
     await db.query(
       `UPDATE arc_markets SET status = 'INVALID', resolution_tx_hash = COALESCE(resolution_tx_hash, $2),
        updated_at = now() WHERE market_id = $1`,
       [args.marketId, txHash],
     );
+    marketEvent = {
+      marketId: String(args.marketId),
+      eventType: "MARKET_INVALIDATED",
+      payload: { marketId: String(args.marketId), status: "INVALID", transactionHash: txHash },
+    };
   } else if (eventName === "OrderSubmitted") {
     const orderHash = args.orderHash as Hex;
     const status = await projectOrderChainActiveRecord(db, orderHash, txHash);
     return status === "ACTIVE" ? orderHash : null;
   } else if (eventName === "OrderCancelled") {
     await projectOrderCancelledRecord(db, args.orderHash as Hex);
+  }
+  if (marketEvent) {
+    const hashedPayload = payloadHash(marketEvent.payload);
+    await appendExchangeEvent(db, {
+      topic: "MARKET",
+      entityId: marketEvent.marketId,
+      eventType: marketEvent.eventType,
+      payload: marketEvent.payload,
+      eventKey,
+      payloadHash: hashedPayload,
+      sourceRoot: txHash,
+    });
   }
   return null;
 }
@@ -862,7 +897,10 @@ async function persistLog(db: Database, config: ArcConfig, log: Log, eventName: 
        ON CONFLICT (tx_hash, log_index) DO NOTHING`,
       [txHash, log.logIndex, blockNumber.toString(), blockHash, eventName, JSON.stringify(serialize(args))],
     );
-    if ((result.rowCount ?? 0) > 0) orderToAssign = await applyIndexedEvent(client, eventName, args, txHash);
+    if ((result.rowCount ?? 0) > 0) {
+      const eventKey = payloadHash({ logIndex: log.logIndex, transactionHash: txHash });
+      orderToAssign = await applyIndexedEvent(client, eventName, args, txHash, eventKey);
+    }
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);

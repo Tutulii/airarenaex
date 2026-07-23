@@ -32,7 +32,10 @@ async function validate() {
   invariant(vector.draft?.schemaVersion === "arc-market-spec-v1", "wrong MarketSpec schema version");
   invariant(vector.draft?.chain?.network === "arc-testnet", "vector is not bound to ARC Testnet");
   invariant(vector.draft?.chain?.chainId === 5_042_002, "vector is not bound to ARC chain ID 5042002");
-  invariant(vector.draft?.chain?.exchangeAddress === "0xEad589fA1b8BE258F47D3601B0c39238A364139b", "vector exchange does not match Day 1 scope");
+  invariant(
+    vector.draft?.chain?.exchangeAddress === "0x1457B0E54f697E9662E1678b74f545CFCe17e96a",
+    "vector exchange does not match the active ArenaExchange V2 deployment",
+  );
   invariant(vector.draft?.collateral?.tokenAddress === "0x3600000000000000000000000000000000000000", "vector collateral does not match Day 1 scope");
   invariant(vector.draft?.category === "SPORTS", "only SPORTS may be executable");
   invariant(vector.draft?.parameters?.referenceData?.liveOddsExecution === "NEVER", "live odds must remain reference-only");

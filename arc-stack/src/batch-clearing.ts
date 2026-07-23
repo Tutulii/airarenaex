@@ -1,4 +1,4 @@
-import { keccak256, stringToHex, type Address, type Hex } from "viem";
+import { encodeAbiParameters, keccak256, stringToHex, type Address, type Hex } from "viem";
 import { canonicalJson } from "./order-intake.js";
 import {
   MAX_ORDER_PRICE_PPM,
@@ -8,7 +8,9 @@ import {
 } from "./trading-policy.js";
 
 export const BATCH_POLICY_VERSION =
-  "PRO_RATA_AT_CLEARING_PRICE_V1+ORDER_HASH_ASC_V1+LOT_10000_V1+FEASIBLE_MIDPOINT_V1";
+  "PRO_RATA_LARGEST_REMAINDER_V2+SELF_TRADE_NETTING_V1+PARTIAL_FILL_V1+LOT_10000_V1+FEASIBLE_MIDPOINT_V1";
+
+const ZERO_BATCH_SEED = `0x${"00".repeat(32)}` as Hex;
 
 export type ClearingOrder = {
   orderHash: Hex;
@@ -35,45 +37,12 @@ export type BatchClearingResult = {
   orderedEligibleOrders: ClearingOrder[];
 };
 
+export type BatchClearingContext = {
+  /** Used only for deterministic remainder tie-breaking; it never changes an order digest. */
+  batchId?: Hex;
+};
+
 type SideOrder = ClearingOrder & { remaining: bigint };
-
-class MaxHeap {
-  private readonly values: Array<{ value: bigint; maker: string; version: number }> = [];
-
-  push(item: { value: bigint; maker: string; version: number }): void {
-    this.values.push(item);
-    let index = this.values.length - 1;
-    while (index > 0) {
-      const parent = Math.floor((index - 1) / 2);
-      const parentValue = this.values[parent];
-      if (!parentValue || parentValue.value >= item.value) break;
-      this.values[index] = parentValue;
-      index = parent;
-    }
-    this.values[index] = item;
-  }
-
-  current(combined: Map<string, bigint>, versions: Map<string, number>): bigint {
-    for (;;) {
-      const top = this.values[0];
-      if (!top) return 0n;
-      if (versions.get(top.maker) === top.version && combined.get(top.maker) === top.value) return top.value;
-      const last = this.values.pop();
-      if (!this.values.length || !last) continue;
-      let index = 0;
-      while (true) {
-        const left = index * 2 + 1;
-        const right = left + 1;
-        if (left >= this.values.length) break;
-        const next = right < this.values.length && this.values[right]!.value > this.values[left]!.value ? right : left;
-        if (this.values[next]!.value <= last.value) break;
-        this.values[index] = this.values[next]!;
-        index = next;
-      }
-      this.values[index] = last;
-    }
-  }
-}
 
 function byHash(left: ClearingOrder, right: ClearingOrder): number {
   return left.orderHash.toLowerCase().localeCompare(right.orderHash.toLowerCase());
@@ -110,34 +79,29 @@ function hashCanonical(value: unknown): Hex {
   return keccak256(stringToHex(canonicalJson(value)));
 }
 
-function noSelfVolume(totalBuy: bigint, totalSell: bigint, largestCombinedMaker: bigint): bigint {
-  const unconstrained = totalBuy < totalSell ? totalBuy : totalSell;
-  const crossMakerCapacity = totalBuy + totalSell - largestCombinedMaker;
-  if (crossMakerCapacity <= 0n) return 0n;
-  return unconstrained < crossMakerCapacity ? unconstrained : crossMakerCapacity;
-}
-
-function volumeAtPrice(buys: SideOrder[], sells: SideOrder[], price: bigint): bigint {
-  let totalBuy = 0n;
-  let totalSell = 0n;
-  const combined = new Map<string, bigint>();
+function makerNettedVolumeAtPrice(buys: SideOrder[], sells: SideOrder[], price: bigint): bigint {
+  const byMaker = new Map<string, { buy: bigint; sell: bigint }>();
   for (const order of buys) {
     if (order.pricePpm < price) continue;
-    totalBuy += order.remaining;
     const key = order.maker.toLowerCase();
-    combined.set(key, (combined.get(key) ?? 0n) + order.remaining);
+    const value = byMaker.get(key) ?? { buy: 0n, sell: 0n };
+    value.buy += order.remaining;
+    byMaker.set(key, value);
   }
   for (const order of sells) {
     if (order.pricePpm > price) continue;
-    totalSell += order.remaining;
     const key = order.maker.toLowerCase();
-    combined.set(key, (combined.get(key) ?? 0n) + order.remaining);
+    const value = byMaker.get(key) ?? { buy: 0n, sell: 0n };
+    value.sell += order.remaining;
+    byMaker.set(key, value);
   }
-  let largestCombinedMaker = 0n;
-  for (const quantity of combined.values()) {
-    if (quantity > largestCombinedMaker) largestCombinedMaker = quantity;
+  let totalNetBuy = 0n;
+  let totalNetSell = 0n;
+  for (const value of byMaker.values()) {
+    if (value.buy > value.sell) totalNetBuy += value.buy - value.sell;
+    else totalNetSell += value.sell - value.buy;
   }
-  return noSelfVolume(totalBuy, totalSell, largestCombinedMaker);
+  return totalNetBuy < totalNetSell ? totalNetBuy : totalNetSell;
 }
 
 function clearingPriceAndVolume(buys: SideOrder[], sells: SideOrder[]): { price: bigint; volume: bigint } | null {
@@ -146,43 +110,10 @@ function clearingPriceAndVolume(buys: SideOrder[], sells: SideOrder[]): { price:
     .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
   if (!candidates.length) return null;
 
-  const buysAscending = [...buys].sort((left, right) => left.pricePpm < right.pricePpm ? -1 : left.pricePpm > right.pricePpm ? 1 : byHash(left, right));
-  const sellsAscending = [...sells].sort((left, right) => left.pricePpm < right.pricePpm ? -1 : left.pricePpm > right.pricePpm ? 1 : byHash(left, right));
-  const combined = new Map<string, bigint>();
-  const versions = new Map<string, number>();
-  const heap = new MaxHeap();
-  let totalBuy = 0n;
-  let totalSell = 0n;
-  let buyRemoveIndex = 0;
-  let sellAddIndex = 0;
-
-  const changeMaker = (maker: string, delta: bigint) => {
-    const normalized = maker.toLowerCase();
-    const next = (combined.get(normalized) ?? 0n) + delta;
-    combined.set(normalized, next);
-    const version = (versions.get(normalized) ?? 0) + 1;
-    versions.set(normalized, version);
-    heap.push({ value: next, maker: normalized, version });
-  };
-  for (const order of buysAscending) {
-    totalBuy += order.remaining;
-    changeMaker(order.maker, order.remaining);
-  }
-
   let bestVolume = 0n;
   const bestPrices: bigint[] = [];
   for (const candidate of candidates) {
-    while (buyRemoveIndex < buysAscending.length && buysAscending[buyRemoveIndex]!.pricePpm < candidate) {
-      const order = buysAscending[buyRemoveIndex++]!;
-      totalBuy -= order.remaining;
-      changeMaker(order.maker, -order.remaining);
-    }
-    while (sellAddIndex < sellsAscending.length && sellsAscending[sellAddIndex]!.pricePpm <= candidate) {
-      const order = sellsAscending[sellAddIndex++]!;
-      totalSell += order.remaining;
-      changeMaker(order.maker, order.remaining);
-    }
-    const volume = noSelfVolume(totalBuy, totalSell, heap.current(combined, versions));
+    const volume = makerNettedVolumeAtPrice(buys, sells, candidate);
     if (volume > bestVolume) {
       bestVolume = volume;
       bestPrices.length = 0;
@@ -195,11 +126,23 @@ function clearingPriceAndVolume(buys: SideOrder[], sells: SideOrder[]): { price:
   const midpoint = (bestPrices[0]! + bestPrices[bestPrices.length - 1]!) / 2n;
   // A midpoint is only valid when the maximum-volume plateau actually spans it.
   // Disjoint equal-volume peaks can otherwise produce a non-executable clearing price.
-  const price = volumeAtPrice(buys, sells, midpoint) === bestVolume ? midpoint : bestPrices[0]!;
+  const price = makerNettedVolumeAtPrice(buys, sells, midpoint) === bestVolume ? midpoint : bestPrices[0]!;
   return { price, volume: bestVolume };
 }
 
-function priorityAllocation(orders: SideOrder[], target: bigint, side: "BUY" | "SELL"): Map<string, bigint> {
+function remainderRank(batchId: Hex, orderHash: Hex): Hex {
+  return keccak256(encodeAbiParameters(
+    [{ type: "bytes32" }, { type: "bytes32" }],
+    [batchId, orderHash],
+  ));
+}
+
+function priorityAllocation(
+  orders: SideOrder[],
+  target: bigint,
+  side: "BUY" | "SELL",
+  batchId: Hex,
+): Map<string, bigint> {
   if (target % ORDER_QUANTITY_STEP_ATOMS !== 0n) throw new Error("allocation_target_not_lot_aligned");
   const sorted = [...orders].sort(side === "BUY" ? buyPriority : sellPriority);
   const allocation = new Map<string, bigint>();
@@ -218,18 +161,29 @@ function priorityAllocation(orders: SideOrder[], target: bigint, side: "BUY" | "
     const targetLots = remaining / ORDER_QUANTITY_STEP_ATOMS;
     const groupLots = groupTotal / ORDER_QUANTITY_STEP_ATOMS;
     let allocatedLots = 0n;
+    const remainders: Array<{ order: SideOrder; remainder: bigint; rank: Hex }> = [];
     for (const order of ranked) {
       const orderLots = order.remaining / ORDER_QUANTITY_STEP_ATOMS;
-      const lots = orderLots * targetLots / groupLots;
+      const numerator = orderLots * targetLots;
+      const lots = numerator / groupLots;
       const value = lots * ORDER_QUANTITY_STEP_ATOMS;
       allocation.set(order.orderHash.toLowerCase(), value);
       allocatedLots += lots;
+      remainders.push({
+        order,
+        remainder: numerator % groupLots,
+        rank: remainderRank(batchId, order.orderHash),
+      });
     }
     let remainderLots = targetLots - allocatedLots;
-    for (const order of ranked) {
+    remainders.sort((left, right) => {
+      if (left.remainder !== right.remainder) return left.remainder > right.remainder ? -1 : 1;
+      return left.rank.localeCompare(right.rank);
+    });
+    for (const candidate of remainders) {
       if (remainderLots === 0n) break;
-      const key = order.orderHash.toLowerCase();
-      if ((allocation.get(key) ?? 0n) < order.remaining) {
+      const key = candidate.order.orderHash.toLowerCase();
+      if ((allocation.get(key) ?? 0n) < candidate.order.remaining) {
         allocation.set(key, (allocation.get(key) ?? 0n) + ORDER_QUANTITY_STEP_ATOMS);
         remainderLots -= 1n;
       }
@@ -238,6 +192,46 @@ function priorityAllocation(orders: SideOrder[], target: bigint, side: "BUY" | "
   }
   if (remaining !== 0n) throw new Error("allocation_target_unreachable");
   return allocation;
+}
+
+/**
+ * Removes a maker's crossing interest before global price-level allocation.
+ * Better-priced orders consume the maker's net capacity first; orders tied at
+ * one price are prorated with the same deterministic largest-remainder rule.
+ */
+function makerNettedOrders(
+  buys: SideOrder[],
+  sells: SideOrder[],
+  batchId: Hex,
+): { buys: SideOrder[]; sells: SideOrder[] } {
+  const makers = new Set([...buys, ...sells].map((order) => order.maker.toLowerCase()));
+  const nettedBuys: SideOrder[] = [];
+  const nettedSells: SideOrder[] = [];
+  for (const maker of [...makers].sort()) {
+    const makerBuys = buys.filter((order) => order.maker.toLowerCase() === maker);
+    const makerSells = sells.filter((order) => order.maker.toLowerCase() === maker);
+    const buyTotal = makerBuys.reduce((sum, order) => sum + order.remaining, 0n);
+    const sellTotal = makerSells.reduce((sum, order) => sum + order.remaining, 0n);
+    if (buyTotal > sellTotal) {
+      const cap = buyTotal - sellTotal;
+      const allocations = priorityAllocation(makerBuys, cap, "BUY", batchId);
+      for (const order of makerBuys) {
+        const remaining = allocations.get(order.orderHash.toLowerCase()) ?? 0n;
+        if (remaining > 0n) nettedBuys.push({ ...order, remaining });
+      }
+    } else if (sellTotal > buyTotal) {
+      const cap = sellTotal - buyTotal;
+      const allocations = priorityAllocation(makerSells, cap, "SELL", batchId);
+      for (const order of makerSells) {
+        const remaining = allocations.get(order.orderHash.toLowerCase()) ?? 0n;
+        if (remaining > 0n) nettedSells.push({ ...order, remaining });
+      }
+    }
+  }
+  return {
+    buys: nettedBuys.sort(buyPriority),
+    sells: nettedSells.sort(sellPriority),
+  };
 }
 
 function maxFlow(
@@ -338,7 +332,12 @@ function maxFlow(
   return { volume, fills };
 }
 
-export function clearUniformPriceBatch(orders: ClearingOrder[], cutoffUnix: bigint): BatchClearingResult {
+export function clearUniformPriceBatch(
+  orders: ClearingOrder[],
+  cutoffUnix: bigint,
+  context: BatchClearingContext = {},
+): BatchClearingResult {
+  const batchId = context.batchId ?? ZERO_BATCH_SEED;
   const eligible = orders
     .map((order): SideOrder => ({ ...order, remaining: available(order) }))
     .filter((order) =>
@@ -367,20 +366,12 @@ export function clearUniformPriceBatch(orders: ClearingOrder[], cutoffUnix: bigi
     };
   }
 
-  const eligibleBuys = buys.filter((order) => order.pricePpm >= clearing.price);
-  const eligibleSells = sells.filter((order) => order.pricePpm <= clearing.price);
-  const buyAllocation = priorityAllocation(eligibleBuys, clearing.volume, "BUY");
-  const sellAllocation = priorityAllocation(eligibleSells, clearing.volume, "SELL");
-  let flowed = maxFlow(eligibleBuys, eligibleSells, buyAllocation, sellAllocation, clearing.volume);
-  if (flowed.volume !== clearing.volume) {
-    flowed = maxFlow(
-      eligibleBuys,
-      eligibleSells,
-      new Map(eligibleBuys.map((order) => [order.orderHash.toLowerCase(), order.remaining])),
-      new Map(eligibleSells.map((order) => [order.orderHash.toLowerCase(), order.remaining])),
-      clearing.volume,
-    );
-  }
+  const pricedBuys = buys.filter((order) => order.pricePpm >= clearing.price);
+  const pricedSells = sells.filter((order) => order.pricePpm <= clearing.price);
+  const netted = makerNettedOrders(pricedBuys, pricedSells, batchId);
+  const buyAllocation = priorityAllocation(netted.buys, clearing.volume, "BUY", batchId);
+  const sellAllocation = priorityAllocation(netted.sells, clearing.volume, "SELL", batchId);
+  const flowed = maxFlow(netted.buys, netted.sells, buyAllocation, sellAllocation, clearing.volume);
   if (flowed.volume !== clearing.volume) throw new Error("self_trade_safe_max_flow_failed");
 
   const resultBody = {

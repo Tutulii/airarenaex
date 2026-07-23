@@ -47,7 +47,8 @@ describe("durable order intake primitives", () => {
     const db = {
       query: vi.fn()
         .mockResolvedValueOnce({ rowCount: 0, rows: [] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ sequence: "42", occurred_at: occurredAt }] }),
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ sequence: "42", occurred_at: occurredAt }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ sequence: "108" }] }),
     } as unknown as DatabaseClient;
     await expect(appendOrderEvent(db, orderHash, "ORDER_ACCEPTED", { maker })).resolves.toEqual({
       sequence: 42n,

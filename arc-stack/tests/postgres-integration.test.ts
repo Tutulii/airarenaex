@@ -1,8 +1,16 @@
 import pg from "pg";
 import { getAddress, type Address, type Hex } from "viem";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { replayPublicBatchBundle, type PublicBatchBundle } from "../src/batch-bundle.js";
 import { assignActiveOrderToBatch, failAndReleaseBatch, sealNextBatch } from "../src/batches.js";
 import { bindDatabaseToExchange, migrateDatabase, type Database } from "../src/db.js";
+import { readExchangeEventsAfter } from "../src/exchange-events.js";
+import {
+  claimHttpIdempotency,
+  completeHttpIdempotency,
+  idempotencyActorHash,
+  idempotencyRequestHash,
+} from "../src/idempotency.js";
 import { createLogger } from "../src/logger.js";
 import { appendOrderEvent, createAcceptanceReceipt } from "../src/order-intake.js";
 
@@ -116,11 +124,18 @@ integration("PostgreSQL durable intake and batch integration", () => {
     for (const order of orders.slice(1)) {
       expect(await assignActiveOrderToBatch(db, config, hash(order.index))).toBe(assignments[0]);
     }
+    const cutoff = await db.query<{ delta_ms: string }>(
+      `SELECT round(extract(epoch FROM (batch_end - cancellation_cutoff)) * 1000)::bigint::text AS delta_ms
+         FROM arc_batches WHERE batch_id = $1`,
+      [assignments[0]],
+    );
+    expect(cutoff.rows[0]?.delta_ms).toBe("200");
 
     await db.query(
       `UPDATE arc_batches
           SET batch_start = clock_timestamp() - interval '2 seconds',
-              batch_end = clock_timestamp() - interval '1 second'`,
+              batch_end = clock_timestamp() - interval '1 second',
+              cancellation_cutoff = clock_timestamp() - interval '1.2 seconds'`,
     );
     const sealed = await sealNextBatch(db, config, "integration-worker");
     expect(sealed?.batchId).toBe(assignments[0]);
@@ -159,6 +174,17 @@ integration("PostgreSQL durable intake and batch integration", () => {
     expect(fills.rows.length).toBeGreaterThan(1);
     expect(fills.rows.every((fill) => !fill.self_trade && BigInt(fill.quantity) % 10_000n === 0n)).toBe(true);
 
+    const publication = await db.query<{ bundle: PublicBatchBundle; bundle_hash: Hex }>(
+      "SELECT bundle, bundle_hash FROM arc_batch_publications WHERE batch_id = $1",
+      [sealed!.batchId],
+    );
+    expect(replayPublicBatchBundle(publication.rows[0]!.bundle).valid).toBe(true);
+    expect(publication.rows[0]!.bundle.bundleHash).toBe(publication.rows[0]!.bundle_hash);
+    await expect(db.query(
+      "UPDATE arc_batch_publications SET bundle = '{}'::jsonb WHERE batch_id = $1",
+      [sealed!.batchId],
+    )).rejects.toMatchObject({ code: "55000" });
+
     await expect(db.query("UPDATE arc_order_events SET payload = '{}'::jsonb WHERE order_hash = $1", [firstHash]))
       .rejects.toMatchObject({ code: "55000" });
     await expect(db.query("DELETE FROM arc_order_receipts WHERE order_hash = $1", [firstHash]))
@@ -184,5 +210,35 @@ integration("PostgreSQL durable intake and batch integration", () => {
     expect(recovered.rows[0]).toEqual({ status: "CANCELLED", assigned_batch_id: null });
     expect((await db.query("SELECT status FROM arc_batches WHERE batch_id = $1", [sealed!.batchId])).rows[0]?.status)
       .toBe("FAILED");
+    const events = await readExchangeEventsAfter(db, 0n, 500);
+    expect(events.length).toBeGreaterThan(orders.length);
+    expect(events.map((event) => BigInt(event.sequence))).toEqual(
+      [...events.map((event) => BigInt(event.sequence))].sort((left, right) => left < right ? -1 : 1),
+    );
+    expect(events.some((event) => event.eventType === "BATCH_PUBLISHED" && event.sourceRoot === publication.rows[0]!.bundle_hash))
+      .toBe(true);
+    expect(events.some((event) => event.eventType === "BATCH_FAILED")).toBe(true);
+  });
+
+  it("makes HTTP idempotency crash-safe, replayable, and request-bound", async () => {
+    const actorHash = idempotencyActorHash("integration-agent-token");
+    const route = "/v1/orders/submit";
+    const key = "integration-idempotency-key";
+    const requestHash = idempotencyRequestHash(route, { orderHash: hash(501) });
+    const claim = await claimHttpIdempotency(db, { actorHash, route, key, requestHash, leaseMs: 60_000 });
+    expect(claim.kind).toBe("ACQUIRED");
+    await expect(claimHttpIdempotency(db, { actorHash, route, key, requestHash, leaseMs: 60_000 }))
+      .rejects.toThrow("idempotency_request_in_progress");
+    if (claim.kind !== "ACQUIRED") throw new Error("idempotency_claim_not_acquired");
+    const response = { success: true, data: { orderHash: hash(501) } };
+    await completeHttpIdempotency(db, {
+      actorHash, route, key, leaseToken: claim.leaseToken, statusCode: 202, response,
+    });
+    await expect(claimHttpIdempotency(db, { actorHash, route, key, requestHash })).resolves.toEqual({
+      kind: "REPLAY", statusCode: 202, response,
+    });
+    await expect(claimHttpIdempotency(db, {
+      actorHash, route, key, requestHash: idempotencyRequestHash(route, { orderHash: hash(502) }),
+    })).rejects.toThrow("idempotency_key_reused");
   });
 });

@@ -21,10 +21,13 @@
     "arc:build": "npm --prefix arc-stack run build",
     "arc:test": "npm --prefix arc-stack test",
     "arc:audit": "npm --prefix arc-stack audit --audit-level=high",
+    "arc:sdk:build": "npm --prefix sdk/typescript run build",
+    "arc:sdk:test": "npm --prefix sdk/typescript test",
+    "arc:sdk:audit": "npm --prefix sdk/typescript audit --audit-level=high",
     "contracts:fmt": "forge fmt --check --root arc-stack/contracts",
     "contracts:lint": "forge lint --root arc-stack/contracts",
     "contracts:test": "forge test --force --root arc-stack/contracts",
     "contracts:size": "forge build --sizes --force --root arc-stack/contracts",
-    "verify": "npm run roadmap:day3:gate && npm run arc:build && npm run arc:test && npm run arc:audit && npm run contracts:fmt && npm run contracts:lint && npm run contracts:test && npm run contracts:size"
+    "verify": "npm run roadmap:day3:gate && npm run arc:build && npm run arc:test && npm run arc:audit && npm run arc:sdk:build && npm run arc:sdk:test && npm run arc:sdk:audit && npm run contracts:fmt && npm run contracts:lint && npm run contracts:test && npm run contracts:size"
   }
 }
