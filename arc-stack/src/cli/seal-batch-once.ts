@@ -33,6 +33,16 @@ try {
       batchIntervalMs: 60_000,
       batchMaxOrders: 40,
       batchExecutionChunkSize: 40,
+      riskLimits: {
+        walletReserveAtoms: 2n ** 255n,
+        marketReserveAtoms: 2n ** 255n,
+        batchNotionalAtoms: 2n ** 255n,
+        treasuryAtoms: 2n ** 255n,
+        ingressPerMinute: 100_000,
+        walletOrdersPerMinute: 100_000,
+        activeMarkets: 100_000,
+        globalCustodyAtoms: 2n ** 255n,
+      },
     }, "v2-direct-cancellation-smoke");
     if (!sealed || sealed.batchId.toLowerCase() === targetBatchId.toLowerCase()) break;
   }

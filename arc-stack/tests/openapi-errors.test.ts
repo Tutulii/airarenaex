@@ -9,7 +9,7 @@ describe("versioned API contract", () => {
     for (const path of [
       "/markets", "/markets/{marketId}/orderbook", "/orders/prepare", "/orders/submit",
       "/orders/cancellations/prepare", "/orders/cancellations/submit", "/batches/{batchId}/bundle",
-      "/events", "/stream", "/errors",
+      "/events", "/stream", "/oracles/adapters", "/operator/risk/halts", "/errors",
     ]) expect(spec.paths).toHaveProperty(path);
     expect(spec.paths["/orders/submit"].post).toMatchObject({
       security: [{ bearerAuth: [] }],
@@ -21,8 +21,15 @@ describe("versioned API contract", () => {
       requestBody: { required: true },
     });
     expect(spec.components.schemas.CreateMarketRequest.required).toEqual([
-      "fixtureId", "specHash", "outcomeCount", "closeTime", "resolutionRule",
+      "fixtureId", "specHash", "outcomeCount", "closeTime", "oracleBinding", "resolutionRule",
     ]);
+    expect(spec.components.schemas.CreateMarketRequest.properties.oracleBinding).toMatchObject({
+      required: [
+        "primaryAdapterId", "primaryFixtureIdentity", "witnessAdapterId",
+        "witnessFixtureIdentity", "witnessAccessTier", "witnessAuthenticated",
+      ],
+      additionalProperties: false,
+    });
     expect(spec.components.schemas.ResolveMarketRequest.required).toEqual(["primary", "witness"]);
     expect(JSON.stringify(spec.components.schemas.ResolveMarketRequest)).not.toContain("winningOutcome");
   });

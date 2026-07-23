@@ -114,9 +114,17 @@ export function buildExchangeOpenApi(errorCodes: ErrorCode[]) {
           "x-websocket-protocol": "airarena.arc.events.v1",
         },
       },
+      "/oracles/adapters": { get: operation("listOracleAdapters", {
+        description: "Versioned oracle-adapter registry. Disabled entries are reserved and cannot open markets.",
+      }) },
+      "/risk/withdrawals": { get: operation("checkWithdrawalRisk", {
+        security: bearerSecurity,
+        description: "Allows finalized withdrawals during non-custody halts and blocks them during custody-safety halts.",
+      }) },
       "/errors": { get: operation("getErrorCatalog") },
       "/openapi.json": { get: { operationId: "getOpenApi", responses: { "200": { description: "This OpenAPI document", ...jsonSchema({ type: "object" }) } } } },
       "/operator/markets": { post: operation("createMarket", { security: operatorSecurity, idempotent: true, accepted: true, body: ref("CreateMarketRequest") }) },
+      "/operator/risk/halts": { get: operation("listRiskHalts", { security: operatorSecurity }) },
       "/operator/markets/{marketId}/resolve": { parameters: [pathParameter("marketId", "32-byte market identifier")], post: operation("resolveMarket", { security: operatorSecurity, idempotent: true, accepted: true, body: ref("ResolveMarketRequest") }) },
       "/operator/markets/{marketId}/invalidate": { parameters: [pathParameter("marketId", "32-byte market identifier")], post: operation("invalidateMarket", { security: operatorSecurity, idempotent: true, accepted: true }) },
     },
@@ -175,7 +183,7 @@ export function buildExchangeOpenApi(errorCodes: ErrorCode[]) {
           properties: { cancellation: ref("ArcCancellation"), signature: ref("Hex") }, additionalProperties: false,
         },
         CreateMarketRequest: {
-          type: "object", required: ["fixtureId", "specHash", "outcomeCount", "closeTime", "resolutionRule"],
+          type: "object", required: ["fixtureId", "specHash", "outcomeCount", "closeTime", "oracleBinding", "resolutionRule"],
           properties: {
             fixtureId: { type: "string", minLength: 1, maxLength: 256 },
             specHash: ref("Hex32"),
@@ -186,6 +194,19 @@ export function buildExchangeOpenApi(errorCodes: ErrorCode[]) {
             displayTitle: { type: "string", minLength: 1, maxLength: 180 },
             outcomeLabels: { type: "array", minItems: 3, maxItems: 3, items: { type: "string", minLength: 1, maxLength: 80 } },
             resolutionRules: { type: "string", minLength: 1, maxLength: 500 },
+            oracleBinding: {
+              type: "object",
+              required: ["primaryAdapterId", "primaryFixtureIdentity", "witnessAdapterId", "witnessFixtureIdentity", "witnessAccessTier", "witnessAuthenticated"],
+              properties: {
+                primaryAdapterId: { const: "txline.sports-result.v1" },
+                primaryFixtureIdentity: { type: "string", minLength: 1, maxLength: 256 },
+                witnessAdapterId: { const: "sportmonks.football.v3" },
+                witnessFixtureIdentity: { type: "string", minLength: 1, maxLength: 256 },
+                witnessAccessTier: { type: "string", enum: ["FREE", "TRIAL"] },
+                witnessAuthenticated: { const: true },
+              },
+              additionalProperties: false,
+            },
             resolutionRule: {
               type: "object",
               required: ["primarySourceId", "witnessSourceId", "sourceEventId", "primarySigner", "witnessSigner", "maxReportAgeSeconds", "maxSourceTimestampSkewSeconds", "graceSeconds"],

@@ -67,6 +67,14 @@ describe("trusted TxLINE outcomes", () => {
   it("restricts autonomously settled fixture markets to explicit three-outcome 1X2", () => {
     const base = {
       fixtureId: "18257865",
+      oracleBinding: {
+        primaryAdapterId: "txline.sports-result.v1",
+        primaryFixtureIdentity: "18257865",
+        witnessAdapterId: "sportmonks.football.v3",
+        witnessFixtureIdentity: "9901",
+        witnessAccessTier: "TRIAL",
+        witnessAuthenticated: true,
+      },
       specHash: `0x${"11".repeat(32)}`,
       closeTime: "2027-07-22T00:00:00.000Z",
       resolutionRule: {

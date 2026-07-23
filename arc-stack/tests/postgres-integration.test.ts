@@ -13,6 +13,9 @@ import {
 } from "../src/idempotency.js";
 import { createLogger } from "../src/logger.js";
 import { appendOrderEvent, createAcceptanceReceipt } from "../src/order-intake.js";
+import { parseSportmonksOracleReport, parseTxlineOracleReport } from "../src/oracle-adapter.js";
+import { evaluateOracleQuorum, storeOracleReport, updateMarketOracleHealth } from "../src/oracle-state.js";
+import { activateHalt, assertOperationAllowed, recordRecoveryObservation } from "../src/risk-controls.js";
 import { resetArcTestData } from "./postgres-test-db.js";
 
 const databaseUrl = process.env.ARC_TEST_DATABASE_URL;
@@ -26,6 +29,16 @@ const config = {
   batchIntervalMs: 1_000,
   batchMaxOrders: 16,
   batchExecutionChunkSize: 16,
+  riskLimits: {
+    walletReserveAtoms: 10n ** 30n,
+    marketReserveAtoms: 10n ** 30n,
+    batchNotionalAtoms: 10n ** 30n,
+    treasuryAtoms: 10n ** 30n,
+    ingressPerMinute: 1_000_000,
+    walletOrdersPerMinute: 1_000_000,
+    activeMarkets: 1_000_000,
+    globalCustodyAtoms: 10n ** 30n,
+  },
 };
 
 function hash(index: number): Hex {
@@ -63,6 +76,189 @@ integration("PostgreSQL durable intake and batch integration", () => {
       config.chainId,
       getAddress("0x00000000000000000000000000000000000000b2"),
     )).rejects.toThrow("database_exchange_binding_mismatch");
+  });
+
+  it("migrates the complete append-only oracle evidence schema and reserved adapters", async () => {
+    const columns = await db.query<{ column_name: string; is_nullable: string }>(
+      `SELECT column_name, is_nullable FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'arc_oracle_reports'`,
+    );
+    const required = ["raw_response", "raw_payload_hash", "proof", "fixture_identity", "sequence", "source_timestamp"];
+    for (const column of required) {
+      expect(columns.rows).toContainEqual({ column_name: column, is_nullable: "NO" });
+    }
+    const reserved = await db.query<{ adapter_id: string; enabled: boolean }>(
+      `SELECT adapter_id, enabled FROM arc_oracle_adapters
+        WHERE adapter_id IN ('pyth.price.v1','election.result.v1') ORDER BY adapter_id`,
+    );
+    expect(reserved.rows).toEqual([
+      { adapter_id: "election.result.v1", enabled: false },
+      { adapter_id: "pyth.price.v1", enabled: false },
+    ]);
+  });
+
+  it("stores oracle evidence append-only and selects corrections deterministically", async () => {
+    const base = {
+      success: true as const,
+      data: {
+        fixtureId: "integration-fixture", status: "final", homeScore: 1, awayScore: 0,
+        winner: "part1" as const, sourceUpdateId: "7", sourceTimestamp: "2026-07-23T12:00:00.000Z",
+        sequence: 7, correction: 0,
+      },
+    };
+    const original = parseTxlineOracleReport(base, undefined, "2026-07-23T12:00:01.000Z");
+    const corrected = parseTxlineOracleReport({
+      ...base,
+      data: { ...base.data, homeScore: 2, correction: 1 },
+    }, undefined, "2026-07-23T12:00:02.000Z");
+    await storeOracleReport(db, corrected, marketId);
+    await storeOracleReport(db, original, marketId);
+    await storeOracleReport(db, corrected, marketId);
+    const selected = await db.query<{ selected_report_hash: string }>(
+      "SELECT selected_report_hash FROM arc_oracle_fixture_state WHERE adapter_id = $1 AND fixture_identity = $2",
+      [corrected.adapterId, corrected.fixtureIdentity],
+    );
+    expect(selected.rows[0]?.selected_report_hash).toBe(corrected.reportHash);
+    await expect(db.query(
+      "UPDATE arc_oracle_reports SET correction_rank = 2 WHERE report_hash = $1",
+      [corrected.reportHash],
+    )).rejects.toThrow(/immutable_relation:arc_oracle_reports/);
+  });
+
+  it("requires consecutive agreeing observations before recovering an oracle halt", async () => {
+    const at = new Date().toISOString();
+    const primary = parseTxlineOracleReport({
+      success: true,
+      data: {
+        fixtureId: "integration-fixture", status: "final", homeScore: 1, awayScore: 0,
+        winner: "part1", sourceUpdateId: "8", sourceTimestamp: at, sequence: 8,
+      },
+    }, undefined, at);
+    const makeWitness = (observedAt: string, score: [number, number]) => parseSportmonksOracleReport({
+      data: {
+        id: "witness-integration", state: { short_name: "FT" }, participants: [],
+        scores: [
+          { description: "CURRENT", score: { participant: "home", goals: score[0] } },
+          { description: "CURRENT", score: { participant: "away", goals: score[1] } },
+        ],
+      },
+      subscription: [{ type: "trial" }],
+    }, undefined, observedAt);
+    const witness = makeWitness(at, [1, 0]);
+    await storeOracleReport(db, primary, marketId);
+    await storeOracleReport(db, witness, marketId);
+    const badWitness = makeWitness(new Date(Date.now() - 3_000).toISOString(), [0, 1]);
+    await storeOracleReport(db, badWitness, marketId);
+    const bad = evaluateOracleQuorum(primary, badWitness, {
+      nowMs: Date.now(), maxAgeSeconds: 60, maxSkewSeconds: 10,
+    });
+    await updateMarketOracleHealth(db, marketId, bad, 3);
+    await expect(assertOperationAllowed(db, "INTAKE", marketId)).rejects.toThrow("exchange_halted_oracle_integrity");
+    for (let index = 0; index < 3; index += 1) {
+      const nextWitness = makeWitness(new Date(Date.now() + index).toISOString(), [1, 0]);
+      await storeOracleReport(db, nextWitness, marketId);
+      const good = evaluateOracleQuorum(primary, nextWitness, {
+        nowMs: Date.now() + 10, maxAgeSeconds: 60, maxSkewSeconds: 10,
+      });
+      expect((await updateMarketOracleHealth(db, marketId, good, 3)).healthy).toBe(index === 2);
+    }
+    await expect(assertOperationAllowed(db, "INTAKE", marketId)).resolves.toBeUndefined();
+  });
+
+  it("counts stable authenticated quorum polls so an immutable final can recover safely", async () => {
+    await db.query("DELETE FROM arc_market_oracle_health WHERE market_id = $1", [marketId]);
+    const at = new Date().toISOString();
+    const primary = parseTxlineOracleReport({
+      success: true,
+      data: {
+        fixtureId: "integration-fixture", status: "final", homeScore: 1, awayScore: 0,
+        winner: "part1", sourceUpdateId: "stable-10", sourceTimestamp: at, sequence: 10,
+      },
+    }, undefined, at);
+    const witness = parseSportmonksOracleReport({
+      data: {
+        id: "witness-integration", state: { short_name: "FT" }, participants: [],
+        scores: [
+          { description: "CURRENT", score: { participant: "home", goals: 1 } },
+          { description: "CURRENT", score: { participant: "away", goals: 0 } },
+        ],
+      },
+      subscription: [{ type: "trial" }],
+    }, undefined, at);
+    await storeOracleReport(db, primary, marketId);
+    await storeOracleReport(db, witness, marketId);
+    const quorum = evaluateOracleQuorum(primary, witness, {
+      nowMs: Date.now(), maxAgeSeconds: 60, maxSkewSeconds: 10,
+    });
+    const observations = [];
+    for (let index = 0; index < 3; index += 1) {
+      observations.push(await updateMarketOracleHealth(db, marketId, quorum, 3));
+    }
+    expect(observations.map((item) => item.consecutiveHealthy)).toEqual([1, 2, 3]);
+    expect(observations.at(-1)?.healthy).toBe(true);
+  });
+
+  it("keeps finalized withdrawals available during non-custody halts and blocks them for custody safety", async () => {
+    await activateHalt(db, { haltKey: "integration:rpc", reason: "RPC", detail: "forced_test" });
+    await expect(assertOperationAllowed(db, "INTAKE")).rejects.toThrow("exchange_halted_rpc");
+    await expect(assertOperationAllowed(db, "BATCH")).rejects.toThrow("exchange_halted_rpc");
+    await expect(assertOperationAllowed(db, "WITHDRAWAL")).resolves.toBeUndefined();
+    await activateHalt(db, { haltKey: "integration:custody", reason: "CUSTODY_SAFETY", detail: "forced_test" });
+    await expect(assertOperationAllowed(db, "WITHDRAWAL")).rejects.toThrow("exchange_halted_custody_safety");
+    await recordRecoveryObservation(db, {
+      haltKey: "integration:custody", reason: "CUSTODY_SAFETY", healthy: true, threshold: 3, detail: "first_good",
+    });
+    await expect(assertOperationAllowed(db, "WITHDRAWAL")).rejects.toThrow("exchange_halted_custody_safety");
+    for (const haltKey of ["integration:custody", "integration:rpc"]) {
+      await recordRecoveryObservation(db, {
+        haltKey, reason: haltKey.endsWith("custody") ? "CUSTODY_SAFETY" : "RPC",
+        healthy: true, threshold: 1, detail: "test_cleanup",
+      });
+    }
+  });
+
+  it("records halt activation idempotently and keeps simultaneous failures independently active", async () => {
+    const input = { haltKey: "integration:idempotent", reason: "CAP" as const, detail: "cap_boundary" };
+    await activateHalt(db, input);
+    await activateHalt(db, input);
+    const activations = await db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM arc_risk_events
+        WHERE halt_key = $1 AND event_type = 'HALT_ACTIVATED'`,
+      [input.haltKey],
+    );
+    expect(activations.rows[0]?.count).toBe("1");
+
+    await activateHalt(db, { haltKey: "integration:oracle", reason: "ORACLE_INTEGRITY", detail: "divergent" });
+    await activateHalt(db, { haltKey: "integration:reconcile", reason: "RECONCILIATION", detail: "ledger_mismatch" });
+    await recordRecoveryObservation(db, {
+      haltKey: input.haltKey, reason: "CAP", healthy: true, threshold: 1, detail: "test_cleanup",
+    });
+    await recordRecoveryObservation(db, {
+      haltKey: "integration:oracle", reason: "ORACLE_INTEGRITY", healthy: true, threshold: 1, detail: "recovered",
+    });
+    await expect(assertOperationAllowed(db, "INTAKE")).rejects.toThrow("exchange_halted_reconciliation");
+    await recordRecoveryObservation(db, {
+      haltKey: "integration:reconcile", reason: "RECONCILIATION", healthy: true, threshold: 1, detail: "recovered",
+    });
+    await expect(assertOperationAllowed(db, "INTAKE")).resolves.toBeUndefined();
+  });
+
+  it("does not reopen a finalized market when a late correction is archived", async () => {
+    await db.query("UPDATE arc_markets SET status = 'RESOLVED' WHERE market_id = $1", [marketId]);
+    const report = parseTxlineOracleReport({
+      success: true,
+      data: {
+        fixtureId: "integration-fixture", status: "final", homeScore: 3, awayScore: 0,
+        winner: "part1", sourceUpdateId: "9", sourceTimestamp: new Date().toISOString(), sequence: 9, correction: 2,
+      },
+    });
+    await storeOracleReport(db, report, marketId);
+    const market = await db.query<{ status: string; resolution_job_id: string | null }>(
+      "SELECT status, resolution_job_id FROM arc_markets WHERE market_id = $1",
+      [marketId],
+    );
+    expect(market.rows[0]).toEqual({ status: "RESOLVED", resolution_job_id: null });
+    await db.query("UPDATE arc_markets SET status = 'OPEN' WHERE market_id = $1", [marketId]);
   });
 
   it("keeps normalized resolution evidence append-only", async () => {

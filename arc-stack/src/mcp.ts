@@ -290,6 +290,9 @@ async function callTool(
       const amount = UintString.parse(args.amount);
       const recipient = z.string().refine(isAddress).transform((value) => getAddress(value)).parse(args.recipient);
       if (BigInt(amount) <= 0n) throw new Error("amount_must_be_positive");
+      // Fail closed before returning calldata if custody itself is under a
+      // safety halt. Non-custody halts intentionally keep withdrawals open.
+      await apiRequest(config, request, "/v1/risk/withdrawals");
       const net = await network(config, request);
       const exchange = getAddress(String(net.exchangeAddress));
       return transaction(

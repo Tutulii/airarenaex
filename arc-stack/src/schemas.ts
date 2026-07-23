@@ -84,6 +84,14 @@ export const CreateMarketSchema = z.object({
   outcomeLabels: z.tuple([z.string().trim().min(1).max(80), z.string().trim().min(1).max(80), z.string().trim().min(1).max(80)])
     .default(["Home", "Draw", "Away"]),
   resolutionRules: z.string().trim().min(1).max(500).default("Regulation-time 1X2 result"),
+  oracleBinding: z.object({
+    primaryAdapterId: z.literal("txline.sports-result.v1"),
+    primaryFixtureIdentity: z.string().trim().min(1).max(256),
+    witnessAdapterId: z.literal("sportmonks.football.v3"),
+    witnessFixtureIdentity: z.string().trim().min(1).max(256),
+    witnessAccessTier: z.enum(["FREE", "TRIAL"]),
+    witnessAuthenticated: z.literal(true),
+  }).strict(),
   resolutionRule: z.object({
     primarySourceId: Bytes32Schema,
     witnessSourceId: Bytes32Schema,

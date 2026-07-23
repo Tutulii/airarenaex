@@ -41,7 +41,9 @@ import {
 } from "./jobs.js";
 import type { Logger } from "./logger.js";
 import { createMetrics } from "./metrics.js";
-import { resultWatcherReady, runResultWatcher } from "./settlement-watcher.js";
+import { resultWatcherReady, runResultWatcher, runTxlineSseWatcher } from "./settlement-watcher.js";
+import { runProtocolLiquidityAgent } from "./liquidity-agent.js";
+import { ORACLE_ADAPTERS } from "./oracle-adapter.js";
 import {
   assignActiveOrderToBatch,
   failAndReleaseBatch,
@@ -52,6 +54,7 @@ import {
 } from "./batches.js";
 import { appendExchangeEvent } from "./exchange-events.js";
 import { appendOrderEvent, payloadHash } from "./order-intake.js";
+import { activateHalt, recordRecoveryObservation } from "./risk-controls.js";
 
 const Hex32 = z.string().refine((value) => isHex(value, { strict: true }) && value.length === 66);
 const UintString = z.string().regex(/^(0|[1-9][0-9]*)$/);
@@ -874,6 +877,24 @@ async function sendContractTransaction(
     }
     case "CREATE_MARKET": {
       const payload = CreateMarketPayload.parse(job.payload);
+      const qualified = await db.query<{
+        primary_adapter_id: string | null;
+        witness_adapter_id: string | null;
+        witness_qualified_at: Date | null;
+        witness_qualification_hash: Hex | null;
+      }>(
+        `SELECT primary_adapter_id, witness_adapter_id, witness_qualified_at, witness_qualification_hash
+           FROM arc_markets WHERE market_id = $1`,
+        [payload.marketId],
+      );
+      const binding = qualified.rows[0];
+      if (!binding
+          || binding.primary_adapter_id !== ORACLE_ADAPTERS.TXLINE_V1
+          || binding.witness_adapter_id !== ORACLE_ADAPTERS.SPORTMONKS_V1
+          || !binding.witness_qualified_at
+          || !binding.witness_qualification_hash) {
+        throw new Error("oracle_witness_not_qualified");
+      }
       const market = await publicClient.readContract({
         address: config.exchangeAddress,
         abi: arenaExchangeAbi,
@@ -1153,6 +1174,11 @@ async function processJobs(
               await reconcileFailedBatch(db, config, job, payload.data, message).catch((failure) =>
                 logger.error({ err: failure, jobId: job?.id }, "arc_batch_failure_reconciliation_failed"),
               );
+              await activateHalt(db, {
+                haltKey: "reconciliation:batch",
+                reason: "RECONCILIATION",
+                detail: message,
+              }).catch(() => undefined);
             }
           }
         } else if (dead && job.kind === "RESOLVE_MARKET") {
@@ -1295,10 +1321,52 @@ async function runIndexer(
     if (state.stopping) return;
     state.indexerLeader = true;
     const publicClient = createArcPublicClient(config);
+    const witnessClient = createArcPublicClient({ rpcUrl: config.rpcWitnessUrl });
+    let lastWitnessCheckAt = 0;
     while (!state.stopping) {
       try {
         const current = await publicClient.getBlockNumber();
+        if (Date.now() - lastWitnessCheckAt >= 5_000) {
+          lastWitnessCheckAt = Date.now();
+          try {
+            const [witnessChainId, witnessHead] = await Promise.all([
+              witnessClient.getChainId(),
+              witnessClient.getBlockNumber(),
+            ]);
+            if (witnessChainId !== config.chainId) throw new Error(`rpc_witness_chain_id_mismatch:${witnessChainId}`);
+            const lag = current > witnessHead ? current - witnessHead : witnessHead - current;
+            if (lag > BigInt(config.rpcMaxBlockLag)) throw new Error(`rpc_head_divergence:${lag.toString()}`);
+            const common = current < witnessHead ? current : witnessHead;
+            const [primaryBlock, witnessBlock] = await Promise.all([
+              publicClient.getBlock({ blockNumber: common }),
+              witnessClient.getBlock({ blockNumber: common }),
+            ]);
+            if (primaryBlock.hash !== witnessBlock.hash) throw new Error(`rpc_block_hash_divergence:${common.toString()}`);
+            await recordRecoveryObservation(db, {
+              haltKey: "rpc:disagreement",
+              reason: "RPC",
+              healthy: true,
+              threshold: config.oracleRecoveryObservations,
+              detail: `rpc_agreement:${common.toString()}`,
+            });
+          } catch (error) {
+            await recordRecoveryObservation(db, {
+              haltKey: "rpc:disagreement",
+              reason: "RPC",
+              healthy: false,
+              threshold: config.oracleRecoveryObservations,
+              detail: errorMessage(error),
+            });
+          }
+        }
         state.lastRpcOkAt = new Date().toISOString();
+        await recordRecoveryObservation(db, {
+          haltKey: "rpc:indexer",
+          reason: "RPC",
+          healthy: true,
+          threshold: config.oracleRecoveryObservations,
+          detail: "rpc_healthy",
+        });
         const stored = await db.query<{ value: { block?: string } }>(
           "SELECT value FROM arc_runtime_state WHERE key = 'indexer_cursor'",
         );
@@ -1327,6 +1395,13 @@ async function runIndexer(
         }
       } catch (error) {
         logger.error({ err: error }, "arc_indexer_iteration_failed");
+        await recordRecoveryObservation(db, {
+          haltKey: "rpc:indexer",
+          reason: "RPC",
+          healthy: false,
+          threshold: config.oracleRecoveryObservations,
+          detail: errorMessage(error),
+        }).catch(() => undefined);
       }
       await new Promise((resolve) => setTimeout(resolve, config.indexerPollIntervalMs));
     }
@@ -1407,4 +1482,6 @@ export async function startMiddleman(config: ArcConfig, logger: Logger): Promise
   void processJobs(config, db, logger, state, metrics);
   void runIndexer(config, db, logger, state, metrics);
   void runResultWatcher(config, db, logger, state, metrics);
+  void runTxlineSseWatcher(config, db, logger, state);
+  void runProtocolLiquidityAgent(config, db, logger, state);
 }

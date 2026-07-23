@@ -8,6 +8,7 @@ import { loadConfig } from "../src/config.js";
 import { appendExchangeEvent } from "../src/exchange-events.js";
 import { createLogger } from "../src/logger.js";
 import { appendOrderEvent, payloadHash } from "../src/order-intake.js";
+import { activateHalt, recoverHalt } from "../src/risk-controls.js";
 import { resetArcTestData } from "./postgres-test-db.js";
 
 const databaseUrl = process.env.ARC_TEST_DATABASE_URL;
@@ -82,6 +83,37 @@ integration("isolated /v1/exchange API", () => {
     expect(catalog.json().data).toHaveProperty("order_cancellation_cutoff_elapsed");
     const openapi = await app.inject({ method: "GET", url: "/v1/exchange/openapi.json" });
     expect(openapi.json().paths).toHaveProperty("/stream");
+    expect(openapi.json().paths).toHaveProperty("/oracles/adapters");
+    expect(openapi.json().paths).toHaveProperty("/risk/withdrawals");
+    expect(openapi.json().components.schemas.CreateMarketRequest.required).toContain("oracleBinding");
+
+    const adapters = await app.inject({ method: "GET", url: "/v1/exchange/oracles/adapters" });
+    expect(adapters.statusCode).toBe(200);
+    expect(adapters.json().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "pyth.price.v1", enabled: false, role: "RESERVED" }),
+      expect.objectContaining({ id: "election.result.v1", enabled: false, role: "RESERVED" }),
+    ]));
+
+    const halts = await app.inject({ method: "GET", url: "/v1/exchange/operator/risk/halts" });
+    expect(halts.statusCode).toBe(403);
+    expect(halts.json()).toMatchObject({ error: { code: "operator_unauthorized" } });
+  });
+
+  it("permits withdrawal preparation through ordinary halts and blocks custody-safety halts", async () => {
+    const headers = { authorization: `Bearer ${token}` };
+    await activateHalt(db, { haltKey: "api-test:rpc", reason: "RPC", detail: "test" });
+    const ordinary = await app.inject({ method: "GET", url: "/v1/exchange/risk/withdrawals", headers });
+    expect(ordinary.statusCode).toBe(200);
+    expect(ordinary.json()).toMatchObject({ success: true, data: { wallet, allowed: true } });
+
+    await activateHalt(db, { haltKey: "api-test:custody", reason: "CUSTODY_SAFETY", detail: "test" });
+    const custody = await app.inject({ method: "GET", url: "/v1/exchange/risk/withdrawals", headers });
+    expect(custody.statusCode).toBe(503);
+    expect(custody.json()).toMatchObject({
+      success: false, error: { code: "exchange_halted_custody_safety", retryable: false },
+    });
+    await recoverHalt(db, "api-test:rpc");
+    await recoverHalt(db, "api-test:custody");
   });
 
   it("replays idempotent writes and rejects request-key reuse", async () => {
@@ -119,6 +151,47 @@ integration("isolated /v1/exchange API", () => {
     });
     expect(mismatch.statusCode).toBe(409);
     expect(mismatch.json()).toMatchObject({ error: { code: "idempotency_key_reused", retryable: false } });
+  });
+
+  it("rejects market creation before enqueue when no authenticated free witness is configured", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/exchange/operator/markets",
+      headers: {
+        "x-airarena-operator-token": operatorToken,
+        "idempotency-key": "missing-witness-market-0001",
+      },
+      payload: {
+        fixtureId: "txline-fixture-without-witness",
+        specHash: `0x${"17".repeat(32)}`,
+        outcomeCount: 3,
+        closeTime: "2027-07-23T12:00:00.000Z",
+        oracleBinding: {
+          primaryAdapterId: "txline.sports-result.v1",
+          primaryFixtureIdentity: "txline-fixture-without-witness",
+          witnessAdapterId: "sportmonks.football.v3",
+          witnessFixtureIdentity: "sportmonks-fixture",
+          witnessAccessTier: "TRIAL",
+          witnessAuthenticated: true,
+        },
+        resolutionRule: {
+          primarySourceId: `0x${"18".repeat(32)}`,
+          witnessSourceId: `0x${"19".repeat(32)}`,
+          sourceEventId: `0x${"20".repeat(32)}`,
+          primarySigner: "0x0000000000000000000000000000000000000011",
+          witnessSigner: "0x0000000000000000000000000000000000000012",
+          maxReportAgeSeconds: "180",
+          maxSourceTimestampSkewSeconds: "30",
+          graceSeconds: "900",
+        },
+      },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ error: { code: "oracle_witness_credential_unavailable" } });
+    const jobs = await db.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM arc_jobs WHERE idempotency_key LIKE 'create-market:%'",
+    );
+    expect(jobs.rows[0]?.count).toBe("0");
   });
 
   it("rejects cancellation preparation at the database-enforced cutoff", async () => {

@@ -7,7 +7,7 @@ export async function resetArcTestData(db: Database): Promise<void> {
       WHERE table_schema = 'public'
         AND table_type = 'BASE TABLE'
         AND table_name LIKE 'arc\\_%' ESCAPE '\\'
-        AND table_name NOT IN ('arc_schema_migrations', 'arc_deployment_binding')
+        AND table_name NOT IN ('arc_schema_migrations', 'arc_deployment_binding', 'arc_oracle_adapters')
       ORDER BY table_name`,
   );
   if (tables.rows.length === 0) return;

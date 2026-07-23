@@ -56,6 +56,17 @@ import {
 } from "./schemas.js";
 import { readAgentDirectory, readOrderbook } from "./read-models.js";
 import { verifyWalletDigest } from "./signatures.js";
+import { verifyQualifyingWitness } from "./oracle-state.js";
+import { ORACLE_ADAPTER_REGISTRY } from "./oracle-adapter.js";
+import {
+  activateHalt,
+  assertActiveMarketCap,
+  assertLiquidityQuote,
+  assertOperationAllowed,
+  assertOrderCaps,
+  quoteNotionalAtoms,
+  readOrderRiskSnapshot,
+} from "./risk-controls.js";
 import {
   appendOrderEvent,
   claimNonce,
@@ -244,6 +255,21 @@ export async function buildApi(dependencies: ApiDependencies) {
   }));
 
   app.get("/v1/errors", async () => ({ success: true, data: publicErrorCatalog() }));
+  app.get("/v1/risk/withdrawals", async (request) => {
+    const agent = await authenticateBearer(db, config, bearer(request), "orders:read");
+    await assertOperationAllowed(db, "WITHDRAWAL");
+    return { success: true, data: { wallet: agent.wallet, allowed: true } };
+  });
+  app.get("/v1/oracles/adapters", async () => ({
+    success: true,
+    data: ORACLE_ADAPTER_REGISTRY.map((adapter) => ({
+      id: adapter.id,
+      enabled: adapter.enabled,
+      category: adapter.category,
+      role: adapter.role,
+      paid: adapter.paid,
+    })),
+  }));
   app.get("/v1/openapi.json", async (_request, reply) => {
     reply.header("content-type", "application/json; charset=utf-8");
     return buildExchangeOpenApi(Object.keys(ERROR_CATALOG) as Array<keyof typeof ERROR_CATALOG>);
@@ -399,6 +425,7 @@ export async function buildApi(dependencies: ApiDependencies) {
     if (!config.exchangeAddress) throw new Error("exchange_not_configured");
     const agent = await authenticateBearer(db, config, bearer(request), "orders:write");
     const input = PrepareOrderSchema.parse(request.body);
+    await assertOperationAllowed(db, "INTAKE", input.marketId);
     const market = await db.query<OrderableMarketState>(
       "SELECT outcome_count, status, close_time FROM arc_markets WHERE market_id = $1",
       [input.marketId],
@@ -422,11 +449,12 @@ export async function buildApi(dependencies: ApiDependencies) {
 
   app.post<{ Body: unknown }>("/v1/orders/submit", async (request, reply) => {
     if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+    const exchangeAddress = config.exchangeAddress;
     const agent = await authenticateBearer(db, config, bearer(request), "orders:write");
     const parsed = SubmitOrderSchema.parse(request.body);
     if (getAddress(parsed.order.maker) !== agent.wallet) throw new Error("order_maker_mismatch");
     const order = parsed.order as ArcOrder;
-    const orderHash = hashArcOrder(config.exchangeAddress, order);
+    const orderHash = hashArcOrder(exchangeAddress, order);
     const valid = await verifyWalletDigest(publicClient, agent.wallet, orderHash, parsed.signature as Hex);
     if (!valid) throw new Error("invalid_signature");
     idempotencyKey(request);
@@ -446,11 +474,134 @@ export async function buildApi(dependencies: ApiDependencies) {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('airarena_arc_risk_admission'))");
+      await assertOperationAllowed(client, "INTAKE", order.marketId);
       const market = await client.query<OrderableMarketState>(
         "SELECT outcome_count, status, close_time FROM arc_markets WHERE market_id = $1 FOR SHARE",
         [order.marketId],
       );
-      validateOrderableMarket(market.rows[0], order.outcome);
+      const marketState = market.rows[0];
+      validateOrderableMarket(marketState, order.outcome);
+      if (!marketState) throw new Error("market_not_found");
+      const custodyAtoms = await publicClient.readContract({
+        address: config.usdcAddress,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [exchangeAddress],
+      });
+      const snapshot = await readOrderRiskSnapshot(
+        client,
+        agent.wallet,
+        order.marketId,
+        null,
+        custodyAtoms,
+        config.liquidityAgentAddress ?? null,
+      );
+      assertOrderCaps(
+        snapshot,
+        config.riskLimits,
+        quoteNotionalAtoms(order.quantity, order.pricePpm),
+        config.liquidityAgentAddress === agent.wallet,
+      );
+      if (config.liquidityAgentAddress === agent.wallet) {
+        const health = await client.query<{ state: string; consecutive_healthy: number; fresh: boolean }>(
+          `SELECT state, consecutive_healthy,
+                  updated_at > clock_timestamp() - ($2::bigint * interval '1 second') AS fresh
+             FROM arc_market_oracle_health WHERE market_id = $1`,
+          [order.marketId, config.oracleStaleAfterSeconds],
+        );
+        const oracle = health.rows[0];
+        if (!oracle || oracle.state !== "HEALTHY" || !oracle.fresh
+            || oracle.consecutive_healthy < config.oracleRecoveryObservations) {
+          throw new Error("liquidity_oracle_unhealthy");
+        }
+        const liquidity = await client.query<{
+          account_enabled: boolean;
+          market_enabled: boolean;
+          account_funded: string;
+          budget_funded: string;
+          budgets_total: string;
+          vault_cap: string;
+          inventory_cap: string;
+          notional_cap: string;
+          loss_cap: string;
+          drawdown_cap: string;
+          daily_volume_cap: string;
+          realized_pnl: string;
+          peak_equity: string;
+          open_notional: string;
+          open_inventory: string;
+          daily_volume: string;
+        }>(
+          `SELECT a.enabled AS account_enabled, b.enabled AS market_enabled,
+                  a.funded_atoms::text AS account_funded, b.funded_atoms::text AS budget_funded,
+                  (SELECT COALESCE(sum(funded_atoms),0)::text FROM arc_liquidity_market_budgets WHERE wallet = a.wallet)
+                    AS budgets_total,
+                  a.vault_cap_atoms::text AS vault_cap, a.inventory_cap_atoms::text AS inventory_cap,
+                  a.notional_cap_atoms::text AS notional_cap, a.loss_cap_atoms::text AS loss_cap,
+                  a.drawdown_cap_atoms::text AS drawdown_cap,
+                  b.daily_volume_cap_atoms::text AS daily_volume_cap,
+                  a.realized_pnl_atoms::text AS realized_pnl, a.peak_equity_atoms::text AS peak_equity,
+                  COALESCE((SELECT sum((quantity * price_ppm + 999999) / 1000000)
+                    FROM arc_orders WHERE maker = a.wallet AND market_id = b.market_id
+                      AND status IN ('QUEUED','SUBMITTED','ACTIVE','MATCHING')),0)::text AS open_notional,
+                  COALESCE((SELECT sum(quantity)
+                    FROM arc_orders WHERE maker = a.wallet AND market_id = b.market_id
+                      AND status IN ('QUEUED','SUBMITTED','ACTIVE','MATCHING')),0)::text AS open_inventory,
+                  COALESCE((SELECT sum((quantity * price_ppm + 999999) / 1000000)
+                    FROM arc_orders WHERE maker = a.wallet AND market_id = b.market_id
+                      AND created_at >= clock_timestamp() - interval '24 hours'),0)::text AS daily_volume
+             FROM arc_liquidity_accounts a
+             JOIN arc_liquidity_market_budgets b ON b.wallet = a.wallet AND b.market_id = $2
+            WHERE a.wallet = $1 FOR UPDATE OF a, b`,
+          [agent.wallet, order.marketId],
+        );
+        const row = liquidity.rows[0];
+        if (!row || !row.account_enabled || !row.market_enabled) throw new Error("liquidity_market_budget_missing");
+        if (BigInt(row.budgets_total) > BigInt(row.account_funded)) throw new Error("liquidity_budget_overallocated");
+        const [available, outcomePositions] = await Promise.all([
+          publicClient.readContract({
+            address: exchangeAddress,
+            abi: arenaExchangeAbi,
+            functionName: "availableCollateral",
+            args: [agent.wallet],
+          }),
+          Promise.all(Array.from({ length: marketState.outcome_count }, (_, outcomeIndex) => (
+            publicClient.readContract({
+              address: exchangeAddress,
+              abi: arenaExchangeAbi,
+              functionName: "positions",
+              args: [order.marketId, outcomeIndex, agent.wallet],
+            })
+          ))),
+        ]);
+        const min = (left: bigint, right: bigint) => left < right ? left : right;
+        const budgetFunded = BigInt(row.budget_funded);
+        const aggregateInventory = outcomePositions.reduce((sum, position) => sum + position, 0n)
+          + BigInt(row.open_inventory);
+        // Claims can settle to zero. For loss/drawdown admission we therefore
+        // value them at zero and use finalized available collateral only. This
+        // is deliberately conservative and never relies on an oracle price.
+        const currentEquity = min(available, budgetFunded);
+        const peakEquity = BigInt(row.peak_equity) > budgetFunded ? BigInt(row.peak_equity) : budgetFunded;
+        assertLiquidityQuote({
+          fundedAtoms: budgetFunded,
+          availableAtoms: min(available, budgetFunded),
+          inventoryAtoms: aggregateInventory,
+          openNotionalAtoms: BigInt(row.open_notional),
+          realizedPnlAtoms: currentEquity - budgetFunded,
+          peakEquityAtoms: peakEquity,
+          currentEquityAtoms: currentEquity,
+          dailyVolumeAtoms: BigInt(row.daily_volume),
+        }, {
+          vaultAtoms: min(config.liquidityLimits.vaultAtoms, BigInt(row.vault_cap)),
+          inventoryAtoms: min(config.liquidityLimits.inventoryAtoms, BigInt(row.inventory_cap)),
+          notionalAtoms: min(config.liquidityLimits.notionalAtoms, BigInt(row.notional_cap)),
+          lossAtoms: min(config.liquidityLimits.lossAtoms, BigInt(row.loss_cap)),
+          drawdownAtoms: min(config.liquidityLimits.drawdownAtoms, BigInt(row.drawdown_cap)),
+          dailyVolumeAtoms: min(config.liquidityLimits.dailyVolumeAtoms, BigInt(row.daily_volume_cap)),
+        }, quoteNotionalAtoms(order.quantity, order.pricePpm), order.isBuy ? order.quantity : 0n);
+      }
       await claimNonce(client, agent.wallet, "ORDER", order.nonce, orderHash);
       const inserted = await client.query(
         `INSERT INTO arc_orders(
@@ -506,6 +657,18 @@ export async function buildApi(dependencies: ApiDependencies) {
       return reply.status(job.created ? 202 : 200).send({ success: true, data: { orderHash, receipt, job } });
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
+      if (error instanceof Error && error.message.startsWith("risk_")) {
+        const custodyFailure = error.message === "risk_global_custody_cap";
+        const globalFailure = custodyFailure || error.message === "risk_ingress_cap";
+        await activateHalt(db, {
+          haltKey: custodyFailure ? "cap:global-custody"
+            : error.message === "risk_ingress_cap" ? "cap:global-ingress"
+              : `cap:${order.marketId}:${error.message}`,
+          reason: custodyFailure ? "CUSTODY_SAFETY" : "CAP",
+          ...(globalFailure ? {} : { marketId: order.marketId }),
+          detail: error.message,
+        }).catch(() => undefined);
+      }
       throw error;
     } finally {
       client.release();
@@ -656,6 +819,13 @@ export async function buildApi(dependencies: ApiDependencies) {
       });
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
+      if (error instanceof Error && error.message === "risk_active_market_cap") {
+        await activateHalt(db, {
+          haltKey: "cap:active-markets",
+          reason: "CAP",
+          detail: error.message,
+        }).catch(() => undefined);
+      }
       throw error;
     } finally {
       client.release();
@@ -808,9 +978,27 @@ export async function buildApi(dependencies: ApiDependencies) {
     return { success: true, data: { ...row, explorerUrl: row.tx_hash ? transactionUrl(row.tx_hash) : null } };
   });
 
+  app.get("/v1/operator/risk/halts", async (request) => {
+    if (!operatorAuthorized(config.operatorToken, operatorToken(request))) throw new Error("operator_unauthorized");
+    const result = await db.query(
+      `SELECT halt_key, reason, scope, market_id, active, detail, activated_at, recovered_at, updated_at
+         FROM arc_exchange_halts ORDER BY active DESC, updated_at DESC LIMIT 100`,
+    );
+    return { success: true, data: result.rows };
+  });
+
   app.post<{ Body: unknown }>("/v1/operator/markets", async (request, reply) => {
     if (!operatorAuthorized(config.operatorToken, operatorToken(request))) throw new Error("operator_unauthorized");
     const input = CreateMarketSchema.parse(request.body);
+    const witnessQualification = await verifyQualifyingWitness({
+      adapterId: input.oracleBinding.witnessAdapterId,
+      fixtureIdentity: input.oracleBinding.witnessFixtureIdentity,
+      accessTier: input.oracleBinding.witnessAccessTier,
+      authenticated: input.oracleBinding.witnessAuthenticated,
+    }, config);
+    if (input.oracleBinding.primaryFixtureIdentity !== input.fixtureId) {
+      throw new Error("oracle_primary_fixture_mismatch");
+    }
     const closeTime = new Date(input.closeTime);
     if (closeTime.getTime() <= Date.now()) throw new Error("invalid_close_time");
     const identifiers = marketIdentifiers(input.fixtureId);
@@ -818,18 +1006,34 @@ export async function buildApi(dependencies: ApiDependencies) {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('airarena_arc_market_creation'))");
+      const existingMarket = await client.query("SELECT 1 FROM arc_markets WHERE market_id = $1", [identifiers.marketId]);
+      if ((existingMarket.rowCount ?? 0) === 0) {
+        const active = await client.query<{ count: string }>(
+          "SELECT count(*)::text AS count FROM arc_markets WHERE status IN ('QUEUED','OPEN')",
+        );
+        assertActiveMarketCap(Number(active.rows[0]?.count ?? "0"), config.riskLimits.activeMarkets);
+      }
       await client.query(
         `INSERT INTO arc_markets(
            market_id, fixture_id, external_id_hash, outcome_count, close_time, status, settlement_policy,
            category, oracle_source, oracle_reference, display_title, outcome_labels, resolution_rules,
-           spec_hash, resolution_rule
-         ) VALUES ($1,$2,$3,$4,$5,'QUEUED','TXLINE_1X2_REGULATION',$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb)
+           spec_hash, resolution_rule, primary_adapter_id, primary_fixture_identity,
+           witness_adapter_id, witness_fixture_identity, witness_access_tier, witness_qualified_at,
+           witness_qualification_hash, witness_qualification_observed_at
+         ) VALUES ($1,$2,$3,$4,$5,'QUEUED','TXLINE_1X2_REGULATION',$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb,
+           $14,$15,$16,$17,$18,clock_timestamp(),$19,$20)
          ON CONFLICT (market_id) DO NOTHING`,
         [
           identifiers.marketId, input.fixtureId, identifiers.externalIdHash, input.outcomeCount, closeTime,
           input.category, input.oracleSource, input.fixtureId, input.displayTitle ?? null,
           JSON.stringify(input.outcomeLabels), input.resolutionRules, input.specHash,
           JSON.stringify(serializeUnknown(input.resolutionRule)),
+          input.oracleBinding.primaryAdapterId, input.oracleBinding.primaryFixtureIdentity,
+          input.oracleBinding.witnessAdapterId, input.oracleBinding.witnessFixtureIdentity,
+          input.oracleBinding.witnessAccessTier,
+          witnessQualification.rawPayloadHash,
+          witnessQualification.observedAt,
         ],
       );
       const job = await enqueueJob(

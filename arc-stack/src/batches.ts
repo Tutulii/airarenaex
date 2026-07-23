@@ -14,6 +14,7 @@ import type { Database } from "./db.js";
 import { appendExchangeEvent } from "./exchange-events.js";
 import { enqueueJob } from "./jobs.js";
 import { appendOrderEvent, canonicalJson, payloadHash } from "./order-intake.js";
+import { activateHalt, assertOperationAllowed, quoteNotionalAtoms } from "./risk-controls.js";
 
 export const BATCH_POLICY_HASH = keccak256(stringToHex(BATCH_POLICY_VERSION));
 
@@ -59,7 +60,7 @@ export function deterministicBatchId(
 
 type BatchConfig = Pick<
   ArcConfig,
-  "chainId" | "exchangeAddress" | "batchIntervalMs" | "batchMaxOrders" | "batchExecutionChunkSize"
+  "chainId" | "exchangeAddress" | "batchIntervalMs" | "batchMaxOrders" | "batchExecutionChunkSize" | "riskLimits"
 >;
 
 export async function assignActiveOrderToBatch(
@@ -68,6 +69,7 @@ export async function assignActiveOrderToBatch(
   orderHash: Hex,
 ): Promise<Hex | null> {
   if (!config.exchangeAddress) throw new Error("exchange_not_configured");
+  await assertOperationAllowed(db, "BATCH");
   const client = await db.connect();
   try {
     await client.query("BEGIN");
@@ -90,6 +92,7 @@ export async function assignActiveOrderToBatch(
       await client.query("COMMIT");
       return order?.assigned_batch_id ?? null;
     }
+    await assertOperationAllowed(client, "BATCH", order.market_id);
     const clock = await client.query<{ now_ms: string }>(
       "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS now_ms",
     );
@@ -205,6 +208,7 @@ export async function sealNextBatch(
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    await assertOperationAllowed(client, "BATCH");
     const selected = await client.query<{
       batch_id: Hex;
       market_id: Hex;
@@ -228,6 +232,7 @@ export async function sealNextBatch(
       await client.query("COMMIT");
       return null;
     }
+    await assertOperationAllowed(client, "BATCH", batch.market_id);
     if (!batch.market_orderable) {
       const released = await client.query<{ order_hash: Hex }>(
         `UPDATE arc_orders SET assigned_batch_id = NULL, updated_at = clock_timestamp()
@@ -291,6 +296,11 @@ export async function sealNextBatch(
       filledQuantity: BigInt(row.filled_quantity),
       expiryUnix: BigInt(row.expiry_unix),
     }));
+    const batchNotional = clearingOrders.reduce(
+      (total, order) => total + quoteNotionalAtoms(order.quantity - order.filledQuantity, order.pricePpm),
+      0n,
+    );
+    if (batchNotional >= config.riskLimits.batchNotionalAtoms) throw new Error("risk_batch_cap");
     const result = clearUniformPriceBatch(clearingOrders, BigInt(batch.cutoff_unix), { batchId: batch.batch_id });
     if (result.fills.length > config.batchExecutionChunkSize) {
       throw new Error("batch_atomic_fill_limit_exceeded");
@@ -491,6 +501,13 @@ export async function sealNextBatch(
     return { batchId: batch.batch_id, executionJobCreated: job.created, releasedOrderHashes };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
+    if (error instanceof Error && error.message === "risk_batch_cap") {
+      await activateHalt(db, {
+        haltKey: "cap:batch",
+        reason: "CAP",
+        detail: error.message,
+      }).catch(() => undefined);
+    }
     throw error;
   } finally {
     client.release();

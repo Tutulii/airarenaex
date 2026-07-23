@@ -429,6 +429,18 @@ contract ArenaExchangeDay15Test is ArenaExchangeTestBase {
         );
         assertTrue(exchange.usedCancellationNonces(address(wallet), 92));
     }
+
+    function testProtocolLiquidityRoleCannotAccessUserCollateral() external {
+        uint256 buyerAvailableBefore = exchange.availableCollateral(buyer);
+        uint256 liabilitiesBefore = exchange.totalLiabilities();
+        assertEq(exchange.availableCollateral(liquidity), 0);
+        vm.prank(liquidity);
+        vm.expectRevert(ArenaExchange.InsufficientCollateral.selector);
+        exchange.withdraw(1, liquidity);
+        assertEq(exchange.availableCollateral(buyer), buyerAvailableBefore);
+        assertEq(exchange.totalLiabilities(), liabilitiesBefore);
+        _assertSolvent();
+    }
 }
 
 contract ArenaExchangeDay16Test is ArenaExchangeTestBase {

@@ -569,10 +569,10 @@ The credible day-30 outcome is a capped ARC Testnet beta with production enginee
 | 16 | Complete deposit, withdrawal, balances, complete sets, positions, and redemption | Foundry tests for roles, USDC behavior, solvency, reentrancy, and checked math |
 | 17 | Implement batch commitment, application, replay protection, restart, and finalization | Fuzz conservation, replay, duplicate batch, and partial-failure paths |
 | 18 | Implement evidence-bound resolution and outcome-derived redemption | No contract call accepts an unproven caller-selected winner |
-| 19 | Build primary TxLINE result adapter with immutable raw payload hashes | Fixture/result replay tests including late and corrected updates |
-| 20 | Add independent witness adapter, grace window, divergence, and invalidation | Stale/divergent/unavailable source chaos tests |
-| 21 | Build isolated protocol liquidity agent with signed orders and hard vault caps | Loss cannot exceed funded market budget in simulation |
-| 22 | Add per-wallet, per-market, treasury, ingress, and global caps plus halt triggers | Limit-boundary and halt/recovery tests |
+| 19 | Build the versioned oracle-adapter boundary and primary TxLINE sports-result adapter; bind every observation to its raw payload hash, TxLINE proof metadata, fixture identity, sequence, timestamps, and correction history | Fixture/result replay tests including late, reordered, duplicated, and corrected updates; TxLINE is consumed as off-chain evidence and is not represented as a native ARC oracle |
+| 20 | Add a free independent sports witness where the selected competition is covered, plus deterministic quorum, grace-window, divergence, unavailability, correction, and invalidation handling | Stale/divergent/unavailable source chaos tests; no market can open without a qualifying primary-and-witness configuration, and no missing quorum can select a winner |
+| 21 | Build the isolated protocol liquidity agent with ordinary signed orders, pre-funded per-market vaults, and hard loss/inventory caps; stop quoting whenever oracle health is degraded | Loss cannot exceed the funded market budget in simulation; stale, divergent, or unavailable evidence disables new maker quotes without moving user funds |
+| 22 | Add per-wallet, per-market, treasury, ingress, and global caps plus oracle-integrity halt triggers and deterministic recovery conditions | Limit-boundary and halt/recovery tests; fresh agreeing sources may restore activity, while pause/recovery authority cannot resolve a market or move collateral |
 | 23 | Move ARC service roles to managed non-exportable signers and keep agent keys wallet-local | Managed-signer tests; public API/MCP reject private-key material; role-rotation proof |
 | 24 | Upgrade vulnerable dependencies, make npm and Foundry builds reproducible, add SBOM and CI gates | Fresh-clone build; zero unaccepted high/critical audit findings |
 | 25 | Load test 1,000 concurrent agents and 10,000 orders in a batch | Published p95/p99 results meet SLO or limits are reduced honestly |
@@ -581,6 +581,58 @@ The credible day-30 outcome is a capped ARC Testnet beta with production enginee
 | 28 | Deploy a fresh ARC Testnet stack; attest deployed bytecode; start a 48-hour soak with protocol maker and adversarial agents | Dashboards green; continuous reconciliation at zero |
 | 29 | Restore drill, key-rotation drill, incident simulation, and go/no-go rehearsal | RTO < 30 minutes; runbooks and rollback validated |
 | 30 | End soak, publish evidence bundle, and open a capped allowlisted beta only if every gate passes | Signed go/no-go; caps active; unresolved items published |
+
+### Days 19-22 implementation scope: free testnet oracle path
+
+The Day-30 beta remains deterministic sports-only. The oracle boundary is category-neutral, but adding an adapter does not authorize a new market template. Crypto and politics stay disabled until their own deterministic schemas, source qualification, witnesses, replay vectors, and launch review are complete.
+
+#### Day 19 - primary evidence and adapter boundary
+
+- Implement `OracleAdapterV1` as a versioned off-chain boundary that emits the existing Day-18 `ResolutionReport` shape without changing the frozen `ArenaExchange` interface.
+- Implement `txline.sports-result.v1` using the current sponsored/free TxLINE REST and SSE access.
+- Persist the exact response bytes, canonical payload hash, fixture ID, sequence, observed/published timestamps, final-status fields, requested stat keys, proof nodes, referenced TxLINE/Solana root metadata, and every later correction.
+- Validate fixture identity, sport/template mapping, allowed status, timestamp window, sequence monotonicity, proof shape, and raw-payload hash before an observation becomes eligible evidence.
+- Treat TxLINE as sports evidence consumed by AIR Arena on ARC. Until TxLINE publishes an authenticated ARC root/verifier, never describe this path as native TxLINE verification on ARC.
+- Make ingestion idempotent and replayable: duplicate observations are no-ops; conflicting bytes for the same source identity are retained as a conflict and cannot silently replace accepted evidence.
+- Reserve disabled adapter identifiers for `pyth.crypto-threshold.v1` and jurisdiction-specific official-election adapters. Their implementation/activation is post-beta work, not a hidden expansion of the sports beta.
+
+**Day 19 exit gate:** recorded fixtures replay to byte-identical normalized reports and hashes; late, reordered, duplicate, corrected, malformed, cross-fixture, and non-final observations are covered by tests.
+
+#### Day 20 - free witness, quorum, and invalidation
+
+- Require a witness adapter independent of the primary source before a market can enter `OPEN`.
+- Use the Sportmonks free plan only for competitions actually included in that plan, or an authenticated official competition result source when available at no cost. A configured name without live eligible coverage does not qualify as a witness.
+- If no free independent witness covers a competition, do not list or open that market. Never downgrade silently to TxLINE-only resolution.
+- Normalize primary and witness reports into the immutable market outcome mapping and require agreement on fixture identity, final status, normalized outcome, and allowed timestamp window.
+- Apply the committed `graceSeconds`. Agreement resolves; stale, malformed, divergent, corrected-after-cutoff, replayed, or unavailable evidence remains pending until grace expiry and then deterministically produces `INVALID` under the published payout rule.
+- Store both normalized reports, raw payload hashes, verification results, quorum decision, and invalidation reason for public replay.
+
+**Day 20 exit gate:** tests cover agreement, staleness, divergence, outage, malformed signatures/proofs, fixture mismatch, late finalization, corrections, replay, and grace expiry; none can produce an operator-selected winner.
+
+#### Day 21 - oracle-aware protocol liquidity
+
+- Run the protocol maker as a separate agent and funded wallet submitting the same signed orders as every other participant.
+- Enforce per-market vault, inventory, order-notional, realized-loss, drawdown, and daily-volume limits using integer atoms only.
+- Permit quotes only while the market is open and the primary/witness health state is `HEALTHY`; `STALE`, `DIVERGENT`, `UNAVAILABLE`, or `MALFORMED` immediately stops new quotes and cancels eligible resting maker orders.
+- Oracle health cannot reprice orders, select outcomes, use user collateral, or bypass the batch cancellation cutoff.
+
+**Day 21 exit gate:** randomized simulations prove losses never exceed pre-funded budgets, user funds are unreachable, and every degraded oracle state stops quoting deterministically.
+
+#### Day 22 - caps, halts, and safe recovery
+
+- Enforce per-wallet exposure/order-rate caps, per-market open-interest and batch caps, protocol-treasury caps, ingress backpressure, and global custody/active-market caps.
+- Halt new intake and batch proposals on stale/divergent/unavailable/malformed evidence, reconciliation mismatch, sequencer drift, RPC disagreement, or breached caps. A halt never resolves a market or moves collateral.
+- Recovery requires the configured number of consecutive fresh, agreeing primary/witness observations plus reconciled ledger/custody state. Recovery creates an auditable event and never retroactively admits orders from the halted interval.
+- Keep withdrawals of already finalized available balances live unless a separate custody invariant fails; reserved or non-finalized balances remain non-withdrawable.
+
+**Day 22 exit gate:** exact-boundary tests cover every cap, simultaneous triggers, halt idempotency, recovery hysteresis, unauthorized recovery, finalized withdrawals, and prohibited resolution/fund movement by the pauser.
+
+#### Cost and activation policy
+
+- Required paid oracle subscriptions for the ARC Testnet beta: **none**.
+- TxLINE remains usable while sponsored/free access is active. Loss of that access disables affected market creation; it does not authorize a fallback winner.
+- Pyth Core may be used later for the deterministic crypto-threshold template with negligible protocol update fees and testnet gas, but crypto activation remains outside this sports-beta roadmap.
+- Chainlink Data Streams, paid Sportmonks coverage, AP Elections, and other commercial feeds remain optional future adapters, not launch dependencies.
 
 ## Day-30 go/no-go gates
 
