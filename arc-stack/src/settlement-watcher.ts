@@ -85,6 +85,10 @@ export async function runTxlineSseWatcher(
       for await (const event of parseOracleSse(response.body)) {
         if (state.stopping) break;
         if (event.id) lastEventId = event.id;
+        // TxLINE sends `event: heartbeat` frames containing only `{ Ts }`.
+        // They prove transport liveness, not fixture evidence, and therefore
+        // must never enter the immutable evidence log or oracle-health quorum.
+        if (event.event === "heartbeat") continue;
         try {
           const raw = JSON.stringify(event.data);
           const reports = parseTxlineScoreSseReports(event.data, raw, new Date().toISOString(), event.id);

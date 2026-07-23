@@ -160,7 +160,21 @@ describe("OracleAdapterV1", () => {
     const events = [];
     for await (const event of parseOracleSse(stream)) events.push(event);
     expect(events.map((event) => event.id)).toEqual(["41", "42"]);
+    expect(events.map((event) => event.event)).toEqual([null, null]);
     expect(parseTxlineOracleReport(events[1]!.data).sequence).toBe(42n);
+  });
+
+  it("preserves SSE event names so transport heartbeats cannot become evidence", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: {\"Ts\":1784827750}\nevent: heartbeat\n\n"));
+        controller.close();
+      },
+    });
+    const events = [];
+    for await (const event of parseOracleSse(stream)) events.push(event);
+    expect(events).toEqual([{ id: null, event: "heartbeat", data: { Ts: 1_784_827_750 } }]);
   });
 
   it("normalizes the real TxLINE score-stream shape instead of a REST envelope", () => {

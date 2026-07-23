@@ -433,7 +433,13 @@ export async function verifySportmonksFixture(
   return { rawPayloadHash: keccak256(stringToHex(raw)), observedAt: new Date().toISOString(), accessTier };
 }
 
-export async function* parseOracleSse(stream: ReadableStream<Uint8Array>): AsyncGenerator<{ id: string | null; data: unknown }> {
+export type OracleSseEvent = {
+  id: string | null;
+  event: string | null;
+  data: unknown;
+};
+
+export async function* parseOracleSse(stream: ReadableStream<Uint8Array>): AsyncGenerator<OracleSseEvent> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -444,12 +450,14 @@ export async function* parseOracleSse(stream: ReadableStream<Uint8Array>): Async
     buffer = frames.pop() ?? "";
     for (const frame of frames) {
       let id: string | null = null;
+      let event: string | null = null;
       const data: string[] = [];
       for (const line of frame.split(/\r?\n/)) {
         if (line.startsWith("id:")) id = line.slice(3).trim();
+        if (line.startsWith("event:")) event = line.slice(6).trim();
         if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
       }
-      if (data.length) yield { id, data: JSON.parse(data.join("\n")) as unknown };
+      if (data.length) yield { id, event, data: JSON.parse(data.join("\n")) as unknown };
     }
     if (done) break;
   }
