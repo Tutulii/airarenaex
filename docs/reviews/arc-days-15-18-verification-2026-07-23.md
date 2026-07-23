@@ -81,3 +81,26 @@ Launch-gate confirmation:
 - ArenaExchange passes chain/address, role, USDC transfer, storage, reentrancy, replay, resolution, solvency, and arithmetic review: proven by the frozen artifact gate and 23-test Forge suite.
 
 Days 19–30 were not implemented or modified in this release.
+
+## Arc Testnet and Railway deployment evidence
+
+Contract deployment:
+
+- ArenaExchange V3: `0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071`
+- Transaction: `0x56b961da2cb0c12a8ba626f473174ae5ce5646a1d4f57c3bd58777f1d7fd8ff1` (`status=0x1`, block `53245927`)
+- Resolution verifier: `0x9fadda17E713a4216FcA32190975cb6F6cb80ABb`
+- Transaction: `0xfa081633ddd45cf2190cd97fa873851c4b5b48e03e53b9a3ba096a8375cdaed1`
+
+Fresh `cast` reads through `https://rpc.testnet.arc.network` returned chain `5042002`, exchange runtime `24576` bytes, verifier runtime `3107` bytes, collateral `0x3600000000000000000000000000000000000000`, collateral decimals `6`, payout atoms `1000000`, and the expected verifier address.
+
+Railway deployments:
+
+| Service | Deployment | Status | Live check |
+|---|---|---|---|
+| API | `c4e12b2f-e316-4ed2-8edc-e5b5f7e7e396` | SUCCESS | `/health/ready` HTTP 200; database, RPC, chain, USDC, exchange all `true` |
+| Middleman | `a786dcf0-fd68-45eb-946a-3bde6f14cffb` | SUCCESS | `/health/ready` HTTP 200; database, RPC, contract, relayer, upgrade multisig, sequencer, resolver, result watcher all `true` |
+| MCP | `02aec2f5-6092-43fd-869f-b7a1a27da8e7` | SUCCESS | `/health/ready` HTTP 200; upstream API `200`; `/health/live` reports 13 tools |
+
+Live API `/v1/network` returned chain `5042002`, official USDC, 6 application decimals, and exchange `0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071`.
+
+The dedicated V3 PostgreSQL database reports migrations `1,2,3,4,5,6,7,8`, immutable deployment binding `5042002 | 0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071`, and empty new `arc_resolution_reports` and `arc_order_events` tables. No V1/V2 financial state was copied.
