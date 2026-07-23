@@ -7,7 +7,7 @@ export const JOB_KINDS = [
   "EXECUTE_BATCH",
   "CREATE_MARKET",
   "RESOLVE_MARKET",
-  "INVALIDATE_MARKET",
+  "INVALIDATE_AFTER_GRACE",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -125,6 +125,22 @@ export async function failJob(
     [job.id, dead ? "DEAD" : "FAILED", error.slice(0, 2000), backoffSeconds],
   );
   return dead;
+}
+
+export async function requeueRestartableJob(
+  db: Database,
+  id: string,
+  error: string,
+): Promise<void> {
+  const result = await db.query(
+    `UPDATE arc_jobs
+     SET status = 'FAILED', attempts = 0, last_error = $2,
+         available_at = now() + interval '5 seconds', locked_at = NULL, locked_by = NULL,
+         updated_at = now()
+     WHERE id = $1 AND status = 'DEAD'`,
+    [id, error.slice(0, 2000)],
+  );
+  if ((result.rowCount ?? 0) !== 1) throw new Error("restartable_job_requeue_failed");
 }
 
 export async function recoverAbandonedJobs(db: Database): Promise<number> {

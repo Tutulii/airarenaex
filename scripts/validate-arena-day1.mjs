@@ -111,7 +111,7 @@ export function validateDay1Artifacts({ scope, decisionRecords }, { requireSigno
 
   invariant(scope.productBoundary?.exchangeContract === "ArenaExchange", "exchange contract must be ArenaExchange");
   invariant(
-    scope.productBoundary?.exchangeAddress === "0xEad589fA1b8BE258F47D3601B0c39238A364139b",
+    scope.productBoundary?.exchangeAddress === "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071",
     "exchange address changed without a scope version",
   );
   invariant(

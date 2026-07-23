@@ -7,7 +7,7 @@
 
 ## Contract boundary
 
-MarketSpec v1 is the immutable market-definition contract for the isolated ARC exchange. It binds every market to ARC Testnet chain ID `5042002`, `ArenaExchange` at `0xEad589fA1b8BE258F47D3601B0c39238A364139b`, and official ARC Testnet USDC at `0x3600000000000000000000000000000000000000` with six application decimals.
+MarketSpec v1 is the immutable market-definition contract for the isolated ARC exchange. New markets bind to ARC Testnet chain ID `5042002`, frozen `ArenaExchange` V3 at `0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071`, and official ARC Testnet USDC at `0x3600000000000000000000000000000000000000` with six application decimals. The committed V2 vector remains valid for its historical contract address.
 
 The strict Zod schemas are executable. Unknown properties, alternate chains, alternate exchanges, alternate collateral, unsafe policy combinations, and operator-selected outcomes are rejected. A market is not eligible to open until its finalized `marketId` and `specHash` reproduce from the stored draft.
 

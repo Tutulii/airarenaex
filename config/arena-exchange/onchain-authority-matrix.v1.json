@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "modelId": "air-arena-arc-onchain-authority-matrix-v1",
+  "contract": "ArenaExchange",
+  "network": {
+    "name": "arc-testnet",
+    "chainId": 5042002
+  },
+  "defaultDeny": true,
+  "roles": [
+    {
+      "name": "sequencer",
+      "identifier": "SEQUENCER_ROLE",
+      "roleHash": "0xac4f1890dc96c9a02330d1fa696648a38f3b282d2449c2d8e6f10507488c84c8",
+      "allowedFunctions": [
+        "publishDataCommitment",
+        "openBatch",
+        "sealBatch",
+        "clearBatch",
+        "commitBatch",
+        "applyBatchMatch",
+        "finalizeBatch",
+        "abortBatch",
+        "executeBatch"
+      ]
+    },
+    {
+      "name": "resolver",
+      "identifier": "RESOLVER_ROLE",
+      "roleHash": "0x92a19c77d2ea87c7f81d50c74403cb2f401780f3ad919571121efe2bdb427eb1",
+      "allowedFunctions": ["resolveMarket"]
+    },
+    {
+      "name": "protocol liquidity agent",
+      "identifier": "PROTOCOL_LIQUIDITY_ROLE",
+      "roleHash": "0x54f7d8e1b9fcc06da9bc8995b5d8d9a6a65df076c937ff6b303fdd57fdb5760a",
+      "allowedFunctions": []
+    },
+    {
+      "name": "emergency pauser",
+      "identifier": "EMERGENCY_PAUSER_ROLE",
+      "roleHash": "0x3b72b77b3d95d9b831cca52b36d7a9c3758f77be6c47ebd087c47739c743d369",
+      "allowedFunctions": ["pause"]
+    },
+    {
+      "name": "upgrade multisig",
+      "identifier": "UPGRADE_MULTISIG_ROLE",
+      "roleHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "allowedFunctions": [
+        "createMarket",
+        "unpause",
+        "setFeeBps",
+        "withdrawProtocolRevenue",
+        "grantRole",
+        "revokeRole",
+        "renounceRole"
+      ]
+    }
+  ],
+  "separationInvariant": "No account may hold more than one listed role, and every role-restricted call denies all other role keys."
+}

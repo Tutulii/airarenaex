@@ -7,6 +7,8 @@ const REDACTED_PATHS = [
   "config.relayerPrivateKey",
   "config.marketAdminPrivateKey",
   "config.matcherPrivateKey",
+  "config.upgradeMultisigPrivateKey",
+  "config.sequencerPrivateKey",
   "config.resolverPrivateKey",
   "config.operatorToken",
   "config.authTokenPepper",

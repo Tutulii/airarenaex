@@ -135,7 +135,7 @@ Every market is created from a versioned template and receives an immutable `spe
     "family": "EVM",
     "network": "arc-testnet",
     "chainId": 5042002,
-    "exchangeAddress": "0xEad589fA1b8BE258F47D3601B0c39238A364139b"
+    "exchangeAddress": "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071"
   },
   "marketNonce": "1",
   "category": "SPORTS",
@@ -463,14 +463,7 @@ Contract rules:
 
 ### Current ARC contract hardening boundary
 
-The ARC contract already separates market administration, matching, resolution, pause, and fee withdrawal roles. Four code-backed controls still block public mainnet and are explicitly recorded in the Day 3 launch gate:
-
-- `resolveMarket(bytes32,uint8)` currently accepts an in-range resolver-supplied outcome; Day 18 must bind immutable source evidence and derive the outcome deterministically.
-- `PAUSER_ROLE` currently controls both `pause` and `unpause`; recovery must require an independent authority and documented approval path.
-- `DEFAULT_ADMIN_ROLE` and fee changes are immediate; administration and fee policy must pass through the required timelock and independent approval flow.
-- Relayer, market-admin, matcher, and resolver keys are currently exportable environment secrets; Day 23 moves them to managed non-exportable signers.
-
-No ARC release may describe those controls as complete until the launch-gate blocker, implementation, negative tests, and immutable evidence all agree.
+ArenaExchange V3 separates sequencing, evidence-bound resolution, protocol liquidity, emergency pause, and upgrade-multisig authority. Day 15 freezes the interface and authority layout; Day 16 proves custody and redemption invariants; Day 17 enforces restartable committed batches; and Day 18 removes caller-selected outcomes in favor of authenticated reports bound to the immutable MarketSpec. The remaining mainnet blockers are independent audit, timelocked administration, and managed non-exportable service signers scheduled later in this roadmap.
 
 ### Additional launch blockers
 

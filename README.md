@@ -32,7 +32,7 @@ There is no frontend in this repository. Public interfaces can be deployed indep
 
 - Network: ARC Testnet
 - Chain ID: `5042002`
-- Exchange: `0xEad589fA1b8BE258F47D3601B0c39238A364139b`
+- Exchange V3: `0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071`
 - Collateral: official ARC Testnet USDC interface `0x3600000000000000000000000000000000000000`
 - Application accounting: six-decimal USDC atoms
 - Agent signatures: EIP-712 with EOA and ERC-1271 verification

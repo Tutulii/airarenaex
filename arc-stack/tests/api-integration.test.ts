@@ -8,6 +8,7 @@ import { loadConfig } from "../src/config.js";
 import { appendExchangeEvent } from "../src/exchange-events.js";
 import { createLogger } from "../src/logger.js";
 import { appendOrderEvent, payloadHash } from "../src/order-intake.js";
+import { resetArcTestData } from "./postgres-test-db.js";
 
 const databaseUrl = process.env.ARC_TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -34,6 +35,7 @@ integration("isolated /v1/exchange API", () => {
 
   beforeAll(async () => {
     app = await buildApi({ config, logger, db });
+    await resetArcTestData(db);
     const tokenHash = createHash("sha256").update(pepper).update("\0").update(token).digest("hex");
     await db.query(
       `INSERT INTO arc_api_tokens(wallet, token_hash, scopes)
@@ -96,14 +98,24 @@ integration("isolated /v1/exchange API", () => {
     expect(replay.json()).toEqual(first.json());
 
     const resolveHeaders = { ...headers, "idempotency-key": "api-mismatch-key-0001" };
+    const report = (outcome: number, sourceByte: string) => ({
+      sourceId: `0x${sourceByte.repeat(64)}`,
+      sourceEventId: `0x${"ef".repeat(32)}`,
+      observedAt: "100",
+      publishedAt: "101",
+      finalResult: true,
+      normalizedOutcome: outcome,
+      rawPayloadHash: `0x${"ab".repeat(32)}`,
+      signatureEvidence: "0x1234",
+    });
     const accepted = await app.inject({
       method: "POST", url: `/v1/exchange/operator/markets/${marketId}/resolve`, headers: resolveHeaders,
-      payload: { winningOutcome: 0 },
+      payload: { primary: report(0, "1"), witness: report(0, "2") },
     });
     expect(accepted.statusCode).toBe(202);
     const mismatch = await app.inject({
       method: "POST", url: `/v1/exchange/operator/markets/${marketId}/resolve`, headers: resolveHeaders,
-      payload: { winningOutcome: 1 },
+      payload: { primary: report(1, "1"), witness: report(1, "2") },
     });
     expect(mismatch.statusCode).toBe(409);
     expect(mismatch.json()).toMatchObject({ error: { code: "idempotency_key_reused", retryable: false } });

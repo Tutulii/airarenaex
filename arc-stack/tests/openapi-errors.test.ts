@@ -20,7 +20,11 @@ describe("versioned API contract", () => {
       security: [{ operatorToken: [] }],
       requestBody: { required: true },
     });
-    expect(spec.components.schemas.CreateMarketRequest.required).toEqual(["fixtureId", "outcomeCount", "closeTime"]);
+    expect(spec.components.schemas.CreateMarketRequest.required).toEqual([
+      "fixtureId", "specHash", "outcomeCount", "closeTime", "resolutionRule",
+    ]);
+    expect(spec.components.schemas.ResolveMarketRequest.required).toEqual(["primary", "witness"]);
+    expect(JSON.stringify(spec.components.schemas.ResolveMarketRequest)).not.toContain("winningOutcome");
   });
 
   it("has unique operation IDs and only resolvable local schema references", () => {

@@ -17,6 +17,8 @@ type CandidateMarket = {
   market_id: string;
   fixture_id: string;
   outcome_count: number;
+  close_time: Date;
+  grace_seconds: number;
 };
 
 function errorMessage(error: unknown): string {
@@ -25,7 +27,8 @@ function errorMessage(error: unknown): string {
 
 async function candidates(db: Database): Promise<CandidateMarket[]> {
   const result = await db.query<CandidateMarket>(
-    `SELECT market_id, fixture_id, outcome_count
+    `SELECT market_id, fixture_id, outcome_count, close_time,
+            COALESCE((resolution_rule->>'graceSeconds')::integer, 900) AS grace_seconds
      FROM arc_markets
      WHERE status = 'OPEN'
        AND settlement_policy = 'TXLINE_1X2_REGULATION'
@@ -92,23 +95,12 @@ export async function scheduleTrustedOutcome(
         JSON.stringify(outcome.evidence),
       ],
     );
-    const job = await enqueueJob(
-      client,
-      "RESOLVE_MARKET",
-      {
-        marketId,
-        winningOutcome: outcome.winningOutcome,
-        fixtureId: outcome.fixtureId,
-        evidenceHash: outcome.evidenceHash,
-      },
-      `auto-resolve:${marketId}:${outcome.evidenceHash}`,
-    );
     await client.query(
       `UPDATE arc_markets
        SET result_home_score = $2, result_away_score = $3, result_source = $4,
            result_source_update_id = $5, result_source_timestamp = $6,
            result_observed_at = now(), result_evidence_hash = $7, result_evidence = $8::jsonb,
-           resolution_job_id = $9, updated_at = now()
+           updated_at = now()
        WHERE market_id = $1`,
       [
         marketId,
@@ -119,17 +111,31 @@ export async function scheduleTrustedOutcome(
         outcome.sourceTimestamp,
         outcome.evidenceHash,
         JSON.stringify(outcome.evidence),
-        job.id,
       ],
     );
     await client.query("COMMIT");
-    return { scheduled: true, jobId: job.id };
+    return { scheduled: false };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
     client.release();
   }
+}
+
+async function scheduleGraceInvalidation(db: Database, market: CandidateMarket): Promise<string | null> {
+  if (Date.now() < market.close_time.getTime() + market.grace_seconds * 1_000) return null;
+  const job = await enqueueJob(
+    db,
+    "INVALIDATE_AFTER_GRACE",
+    { marketId: market.market_id },
+    `invalidate-after-grace:${market.market_id}`,
+  );
+  await db.query(
+    "UPDATE arc_markets SET resolution_job_id = $2, updated_at = now() WHERE market_id = $1 AND resolution_job_id IS NULL",
+    [market.market_id, job.id],
+  );
+  return job.id;
 }
 
 async function writeHeartbeat(db: Database, state: ResultWatcherState, candidateCount: number): Promise<void> {
@@ -190,18 +196,25 @@ export async function runResultWatcher(
           try {
             const fetched = await fetchTrustedTxlineOutcome(config.txlineSourceUrl, market.fixture_id);
             state.lastResultSourceOkAt = new Date().toISOString();
-            if (fetched.kind === "pending") continue;
+            if (fetched.kind === "pending") {
+              const jobId = await scheduleGraceInvalidation(db, market);
+              if (jobId) {
+                metrics.autoSettlementsEnqueued.inc();
+                logger.info({ marketId: market.market_id, fixtureId: market.fixture_id, jobId }, "arc_grace_invalidation_enqueued");
+              }
+              continue;
+            }
             metrics.resultObservations.inc({ result: "trusted_final" });
-            const scheduled = await scheduleTrustedOutcome(db, market.market_id, fetched.outcome);
-            if (scheduled.scheduled) {
+            await scheduleTrustedOutcome(db, market.market_id, fetched.outcome);
+            logger.info({
+              marketId: market.market_id,
+              fixtureId: market.fixture_id,
+              evidenceHash: fetched.outcome.evidenceHash,
+            }, "arc_unsigned_source_observation_recorded_without_resolution");
+            const jobId = await scheduleGraceInvalidation(db, market);
+            if (jobId) {
               metrics.autoSettlementsEnqueued.inc();
-              logger.info({
-                marketId: market.market_id,
-                fixtureId: market.fixture_id,
-                winningOutcome: fetched.outcome.winningOutcome,
-                evidenceHash: fetched.outcome.evidenceHash,
-                jobId: scheduled.jobId,
-              }, "arc_autonomous_resolution_enqueued");
+              logger.info({ marketId: market.market_id, fixtureId: market.fixture_id, jobId }, "arc_grace_invalidation_enqueued");
             }
           } catch (error) {
             const message = errorMessage(error);

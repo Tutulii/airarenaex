@@ -5,7 +5,7 @@
 - Threat model: `config/arena-exchange/threat-model.v1.json`
 - Launch gate: `config/arena-exchange/launch-gate.v1.json`
 - Network: ARC Testnet, chain ID `5042002`
-- Exchange: `ArenaExchange` at `0xEad589fA1b8BE258F47D3601B0c39238A364139b`
+- Exchange: frozen `ArenaExchange` V3 at `0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071`
 
 ## Default-deny model
 
@@ -42,4 +42,4 @@ The API, middleman, MCP, database, role wallets, contract, and release lifecycle
 
 Market creation/validation require a two-member market-admin quorum. Resolution requires two independent attestations and immutable-rule derivation. Resume requires recovery quorum, zero reconciliation drift, restored oracle integrity, and incident approval. Contract-role changes require three approvals and a 48-hour timelock. Treasury withdrawal requires two approvals, a 24-hour delay, unreserved protocol ownership, and zero custody drift. Public-mainnet deployment requires every independent launch gate and the exact approved digest.
 
-The current ARC beta uses environment-backed service role keys and the contract currently lets `PAUSER_ROLE` unpause directly. The canonical matrix does not normalize those gaps; `config/arena-exchange/launch-gate.v1.json` blocks public value until managed signers and enforced pause/recovery separation are proven.
+The current ARC beta still uses environment-backed service role keys, which remain a later-roadmap public-value blocker. `EMERGENCY_PAUSER_ROLE` can only pause; recovery is restricted to the independent `UPGRADE_MULTISIG_ROLE` and cross-role negative tests enforce that separation.

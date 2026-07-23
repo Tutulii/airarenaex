@@ -28,14 +28,7 @@ Other AIR products may share operational platforms, but they do not share ARC fi
 
 The canonical model contains twenty asset-centric STRIDE abuse cases and twenty-four controls. Together they cover spoofed or replayed wallet messages, market-rule mutation, sequencer censorship, batch tampering, reservation races, resolver capture, oracle faults, pause abuse, contract-admin compromise, liquidity-vault abuse, key exfiltration, sensitive order disclosure, denial of service, lost acknowledgements, supply-chain compromise, RPC/reorg faults, product-boundary contamination, and launch bypass.
 
-Four verified implementation conditions are explicitly represented rather than hidden:
-
-- `ArenaExchange.resolveMarket(bytes32,uint8)` currently accepts a resolver-supplied in-range outcome without on-chain evidence binding.
-- `PAUSER_ROLE` currently controls both `pause()` and `unpause()`, while the signed design separates pause from recovery.
-- `DEFAULT_ADMIN_ROLE` can change roles and fees without the required 48-hour timelock flow.
-- ARC relayer, market-admin, matcher, and resolver signers are currently exportable environment-backed keys.
-
-These are public-value release blockers, not Day 3 omissions. Day 3 is complete because the model names the current attack paths, evidence, owners, required controls, response, and fail-closed launch effect.
+The Day 15-18 implementation closes two previously recorded contract gaps: resolution now requires authenticated, MarketSpec-bound evidence, and the emergency pauser cannot unpause or invoke any other authority. The remaining public-value release blockers are the later-roadmap controls for timelocked administration and managed non-exportable service signers. Day 3 remains complete because the model preserves each attack path, control, evidence owner, response, and fail-closed launch effect.
 
 ## Trust assumptions
 

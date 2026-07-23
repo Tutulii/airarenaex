@@ -28,5 +28,5 @@ AIR Arena is moving its production-roadmap exchange to an isolated EVM execution
 
 - Status: APPROVED
 - Approved by: AIR Arena project owner
-- Approved at: 2026-07-21T09:27:12Z
-- Approval reference: conversation:2026-07-21:complete-arc-days-1-3
+- Approved at: 2026-07-23T11:36:44Z
+- Approval reference: conversation:2026-07-23:deploy-and-verify-days-15-18

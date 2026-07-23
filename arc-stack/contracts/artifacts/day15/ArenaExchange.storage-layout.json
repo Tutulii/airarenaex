@@ -1,0 +1,1026 @@
+{
+  "storage": [
+    {
+      "astId": 27,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "_roles",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_mapping(t_bytes32,t_struct(RoleData)22_storage)"
+    },
+    {
+      "astId": 1153,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "_paused",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_bool"
+    },
+    {
+      "astId": 1263,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "_status",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_uint256"
+    },
+    {
+      "astId": 3101,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "_nameFallback",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_string_storage"
+    },
+    {
+      "astId": 3103,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "_versionFallback",
+      "offset": 0,
+      "slot": "4",
+      "type": "t_string_storage"
+    },
+    {
+      "astId": 7243,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "feeBps",
+      "offset": 0,
+      "slot": "5",
+      "type": "t_uint16"
+    },
+    {
+      "astId": 7245,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "accruedProtocolFees",
+      "offset": 0,
+      "slot": "6",
+      "type": "t_uint256"
+    },
+    {
+      "astId": 7247,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "accruedProtocolDust",
+      "offset": 0,
+      "slot": "7",
+      "type": "t_uint256"
+    },
+    {
+      "astId": 7249,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "totalAvailableCollateral",
+      "offset": 0,
+      "slot": "8",
+      "type": "t_uint256"
+    },
+    {
+      "astId": 7251,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "totalReservedCollateral",
+      "offset": 0,
+      "slot": "9",
+      "type": "t_uint256"
+    },
+    {
+      "astId": 7253,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "totalMarketCollateral",
+      "offset": 0,
+      "slot": "10",
+      "type": "t_uint256"
+    },
+    {
+      "astId": 7255,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "totalPendingBatchCollateral",
+      "offset": 0,
+      "slot": "11",
+      "type": "t_uint256"
+    },
+    {
+      "astId": 7259,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "availableCollateral",
+      "offset": 0,
+      "slot": "12",
+      "type": "t_mapping(t_address,t_uint256)"
+    },
+    {
+      "astId": 7264,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "markets",
+      "offset": 0,
+      "slot": "13",
+      "type": "t_mapping(t_bytes32,t_struct(Market)7066_storage)"
+    },
+    {
+      "astId": 7269,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "resolutionRules",
+      "offset": 0,
+      "slot": "14",
+      "type": "t_mapping(t_bytes32,t_struct(ResolutionRule)11364_storage)"
+    },
+    {
+      "astId": 7273,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "marketCollateral",
+      "offset": 0,
+      "slot": "15",
+      "type": "t_mapping(t_bytes32,t_uint256)"
+    },
+    {
+      "astId": 7277,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "completeSetAtomsOutstanding",
+      "offset": 0,
+      "slot": "16",
+      "type": "t_mapping(t_bytes32,t_uint256)"
+    },
+    {
+      "astId": 7283,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "claimSupplyAtoms",
+      "offset": 0,
+      "slot": "17",
+      "type": "t_mapping(t_bytes32,t_mapping(t_uint8,t_uint256))"
+    },
+    {
+      "astId": 7287,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "invalidationRemainderUnits",
+      "offset": 0,
+      "slot": "18",
+      "type": "t_mapping(t_bytes32,t_uint256)"
+    },
+    {
+      "astId": 7295,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "positions",
+      "offset": 0,
+      "slot": "19",
+      "type": "t_mapping(t_bytes32,t_mapping(t_uint8,t_mapping(t_address,t_uint256)))"
+    },
+    {
+      "astId": 7300,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "_orders",
+      "offset": 0,
+      "slot": "20",
+      "type": "t_mapping(t_bytes32,t_struct(StoredOrder)7098_storage)"
+    },
+    {
+      "astId": 7306,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "usedNonces",
+      "offset": 0,
+      "slot": "21",
+      "type": "t_mapping(t_address,t_mapping(t_uint256,t_bool))"
+    },
+    {
+      "astId": 7312,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "usedCancellationNonces",
+      "offset": 0,
+      "slot": "22",
+      "type": "t_mapping(t_address,t_mapping(t_uint256,t_bool))"
+    },
+    {
+      "astId": 7316,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "publishedDataCommitments",
+      "offset": 0,
+      "slot": "23",
+      "type": "t_mapping(t_bytes32,t_uint256)"
+    },
+    {
+      "astId": 7321,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "_batches",
+      "offset": 0,
+      "slot": "24",
+      "type": "t_mapping(t_bytes32,t_struct(Batch)7160_storage)"
+    },
+    {
+      "astId": 7325,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "activeBatchByMarket",
+      "offset": 0,
+      "slot": "25",
+      "type": "t_mapping(t_bytes32,t_bytes32)"
+    },
+    {
+      "astId": 7329,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "nextBatchSequence",
+      "offset": 0,
+      "slot": "26",
+      "type": "t_mapping(t_bytes32,t_uint64)"
+    },
+    {
+      "astId": 7333,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "lastFinalizedLedgerRoot",
+      "offset": 0,
+      "slot": "27",
+      "type": "t_mapping(t_bytes32,t_bytes32)"
+    },
+    {
+      "astId": 7339,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "appliedBatchLeaves",
+      "offset": 0,
+      "slot": "28",
+      "type": "t_mapping(t_bytes32,t_mapping(t_uint32,t_bytes32))"
+    },
+    {
+      "astId": 7345,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "pendingBatchCollateral",
+      "offset": 0,
+      "slot": "29",
+      "type": "t_mapping(t_bytes32,t_mapping(t_address,t_uint256))"
+    },
+    {
+      "astId": 7351,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "pendingBatchShares",
+      "offset": 0,
+      "slot": "30",
+      "type": "t_mapping(t_bytes32,t_mapping(t_address,t_uint256))"
+    },
+    {
+      "astId": 7355,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "usedResolutionReports",
+      "offset": 0,
+      "slot": "31",
+      "type": "t_mapping(t_bytes32,t_bool)"
+    },
+    {
+      "astId": 7362,
+      "contract": "src/ArenaExchange.sol:ArenaExchange",
+      "label": "normalizedResolutionReports",
+      "offset": 0,
+      "slot": "32",
+      "type": "t_mapping(t_bytes32,t_mapping(t_uint8,t_struct(NormalizedResolutionReport)7177_storage))"
+    }
+  ],
+  "types": {
+    "t_address": {
+      "encoding": "inplace",
+      "label": "address",
+      "numberOfBytes": "20"
+    },
+    "t_bool": {
+      "encoding": "inplace",
+      "label": "bool",
+      "numberOfBytes": "1"
+    },
+    "t_bytes32": {
+      "encoding": "inplace",
+      "label": "bytes32",
+      "numberOfBytes": "32"
+    },
+    "t_enum(BatchStatus)7050": {
+      "encoding": "inplace",
+      "label": "enum ArenaExchange.BatchStatus",
+      "numberOfBytes": "1"
+    },
+    "t_enum(MarketStatus)7036": {
+      "encoding": "inplace",
+      "label": "enum ArenaExchange.MarketStatus",
+      "numberOfBytes": "1"
+    },
+    "t_enum(OrderStatus)7041": {
+      "encoding": "inplace",
+      "label": "enum ArenaExchange.OrderStatus",
+      "numberOfBytes": "1"
+    },
+    "t_mapping(t_address,t_bool)": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => bool)",
+      "numberOfBytes": "32",
+      "value": "t_bool"
+    },
+    "t_mapping(t_address,t_mapping(t_uint256,t_bool))": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => mapping(uint256 => bool))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_uint256,t_bool)"
+    },
+    "t_mapping(t_address,t_uint256)": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => uint256)",
+      "numberOfBytes": "32",
+      "value": "t_uint256"
+    },
+    "t_mapping(t_bytes32,t_bool)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => bool)",
+      "numberOfBytes": "32",
+      "value": "t_bool"
+    },
+    "t_mapping(t_bytes32,t_bytes32)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => bytes32)",
+      "numberOfBytes": "32",
+      "value": "t_bytes32"
+    },
+    "t_mapping(t_bytes32,t_mapping(t_address,t_uint256))": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => mapping(address => uint256))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_address,t_uint256)"
+    },
+    "t_mapping(t_bytes32,t_mapping(t_uint32,t_bytes32))": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => mapping(uint32 => bytes32))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_uint32,t_bytes32)"
+    },
+    "t_mapping(t_bytes32,t_mapping(t_uint8,t_mapping(t_address,t_uint256)))": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => mapping(uint8 => mapping(address => uint256)))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_uint8,t_mapping(t_address,t_uint256))"
+    },
+    "t_mapping(t_bytes32,t_mapping(t_uint8,t_struct(NormalizedResolutionReport)7177_storage))": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => mapping(uint8 => struct ArenaExchange.NormalizedResolutionReport))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_uint8,t_struct(NormalizedResolutionReport)7177_storage)"
+    },
+    "t_mapping(t_bytes32,t_mapping(t_uint8,t_uint256))": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => mapping(uint8 => uint256))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_uint8,t_uint256)"
+    },
+    "t_mapping(t_bytes32,t_struct(Batch)7160_storage)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => struct ArenaExchange.Batch)",
+      "numberOfBytes": "32",
+      "value": "t_struct(Batch)7160_storage"
+    },
+    "t_mapping(t_bytes32,t_struct(Market)7066_storage)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => struct ArenaExchange.Market)",
+      "numberOfBytes": "32",
+      "value": "t_struct(Market)7066_storage"
+    },
+    "t_mapping(t_bytes32,t_struct(ResolutionRule)11364_storage)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => struct IArenaResolutionVerifier.ResolutionRule)",
+      "numberOfBytes": "32",
+      "value": "t_struct(ResolutionRule)11364_storage"
+    },
+    "t_mapping(t_bytes32,t_struct(RoleData)22_storage)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => struct AccessControl.RoleData)",
+      "numberOfBytes": "32",
+      "value": "t_struct(RoleData)22_storage"
+    },
+    "t_mapping(t_bytes32,t_struct(StoredOrder)7098_storage)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => struct ArenaExchange.StoredOrder)",
+      "numberOfBytes": "32",
+      "value": "t_struct(StoredOrder)7098_storage"
+    },
+    "t_mapping(t_bytes32,t_uint256)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => uint256)",
+      "numberOfBytes": "32",
+      "value": "t_uint256"
+    },
+    "t_mapping(t_bytes32,t_uint64)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => uint64)",
+      "numberOfBytes": "32",
+      "value": "t_uint64"
+    },
+    "t_mapping(t_uint256,t_bool)": {
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => bool)",
+      "numberOfBytes": "32",
+      "value": "t_bool"
+    },
+    "t_mapping(t_uint32,t_bytes32)": {
+      "encoding": "mapping",
+      "key": "t_uint32",
+      "label": "mapping(uint32 => bytes32)",
+      "numberOfBytes": "32",
+      "value": "t_bytes32"
+    },
+    "t_mapping(t_uint8,t_mapping(t_address,t_uint256))": {
+      "encoding": "mapping",
+      "key": "t_uint8",
+      "label": "mapping(uint8 => mapping(address => uint256))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_address,t_uint256)"
+    },
+    "t_mapping(t_uint8,t_struct(NormalizedResolutionReport)7177_storage)": {
+      "encoding": "mapping",
+      "key": "t_uint8",
+      "label": "mapping(uint8 => struct ArenaExchange.NormalizedResolutionReport)",
+      "numberOfBytes": "32",
+      "value": "t_struct(NormalizedResolutionReport)7177_storage"
+    },
+    "t_mapping(t_uint8,t_uint256)": {
+      "encoding": "mapping",
+      "key": "t_uint8",
+      "label": "mapping(uint8 => uint256)",
+      "numberOfBytes": "32",
+      "value": "t_uint256"
+    },
+    "t_string_storage": {
+      "encoding": "bytes",
+      "label": "string",
+      "numberOfBytes": "32"
+    },
+    "t_struct(Batch)7160_storage": {
+      "encoding": "inplace",
+      "label": "struct ArenaExchange.Batch",
+      "numberOfBytes": "544",
+      "members": [
+        {
+          "astId": 7116,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "marketId",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7118,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "priorRoot",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7120,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "dataCommitment",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7122,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "orderRoot",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7124,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "matchRoot",
+          "offset": 0,
+          "slot": "4",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7126,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "expectedLedgerRoot",
+          "offset": 0,
+          "slot": "5",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7128,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "rollingLedgerRoot",
+          "offset": 0,
+          "slot": "6",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7130,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "sequence",
+          "offset": 0,
+          "slot": "7",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 7132,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "clearingPricePpm",
+          "offset": 8,
+          "slot": "7",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 7134,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "matchCount",
+          "offset": 16,
+          "slot": "7",
+          "type": "t_uint32"
+        },
+        {
+          "astId": 7136,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "appliedCount",
+          "offset": 20,
+          "slot": "7",
+          "type": "t_uint32"
+        },
+        {
+          "astId": 7138,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "outcome",
+          "offset": 24,
+          "slot": "7",
+          "type": "t_uint8"
+        },
+        {
+          "astId": 7141,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "status",
+          "offset": 25,
+          "slot": "7",
+          "type": "t_enum(BatchStatus)7050"
+        },
+        {
+          "astId": 7143,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "expectedDebits",
+          "offset": 0,
+          "slot": "8",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7145,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "expectedCredits",
+          "offset": 0,
+          "slot": "9",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7147,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "expectedFees",
+          "offset": 0,
+          "slot": "10",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7149,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "expectedClaimAtoms",
+          "offset": 0,
+          "slot": "11",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7151,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "appliedDebits",
+          "offset": 0,
+          "slot": "12",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7153,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "appliedCredits",
+          "offset": 0,
+          "slot": "13",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7155,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "appliedFees",
+          "offset": 0,
+          "slot": "14",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7157,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "appliedClaimDebits",
+          "offset": 0,
+          "slot": "15",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7159,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "appliedClaimCredits",
+          "offset": 0,
+          "slot": "16",
+          "type": "t_uint256"
+        }
+      ]
+    },
+    "t_struct(Market)7066_storage": {
+      "encoding": "inplace",
+      "label": "struct ArenaExchange.Market",
+      "numberOfBytes": "128",
+      "members": [
+        {
+          "astId": 7052,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "specHash",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7054,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "externalIdHash",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7056,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "resolutionRuleHash",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7058,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "closeTime",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 7060,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "outcomeCount",
+          "offset": 8,
+          "slot": "3",
+          "type": "t_uint8"
+        },
+        {
+          "astId": 7063,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "status",
+          "offset": 9,
+          "slot": "3",
+          "type": "t_enum(MarketStatus)7036"
+        },
+        {
+          "astId": 7065,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "winningOutcome",
+          "offset": 10,
+          "slot": "3",
+          "type": "t_uint8"
+        }
+      ]
+    },
+    "t_struct(NormalizedResolutionReport)7177_storage": {
+      "encoding": "inplace",
+      "label": "struct ArenaExchange.NormalizedResolutionReport",
+      "numberOfBytes": "160",
+      "members": [
+        {
+          "astId": 7162,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "sourceId",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7164,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "sourceEventId",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7166,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "rawPayloadHash",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7168,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "reportDigest",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7170,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "observedAt",
+          "offset": 0,
+          "slot": "4",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 7172,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "publishedAt",
+          "offset": 8,
+          "slot": "4",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 7174,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "finalResult",
+          "offset": 16,
+          "slot": "4",
+          "type": "t_bool"
+        },
+        {
+          "astId": 7176,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "normalizedOutcome",
+          "offset": 17,
+          "slot": "4",
+          "type": "t_uint8"
+        }
+      ]
+    },
+    "t_struct(Order)7085_storage": {
+      "encoding": "inplace",
+      "label": "struct ArenaExchange.Order",
+      "numberOfBytes": "192",
+      "members": [
+        {
+          "astId": 7068,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "maker",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_address"
+        },
+        {
+          "astId": 7070,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "marketId",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 7072,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "outcome",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_uint8"
+        },
+        {
+          "astId": 7074,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "isBuy",
+          "offset": 1,
+          "slot": "2",
+          "type": "t_bool"
+        },
+        {
+          "astId": 7076,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "pricePpm",
+          "offset": 2,
+          "slot": "2",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 7078,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "quantity",
+          "offset": 10,
+          "slot": "2",
+          "type": "t_uint128"
+        },
+        {
+          "astId": 7080,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "expiry",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 7082,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "nonce",
+          "offset": 0,
+          "slot": "4",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7084,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "clientOrderId",
+          "offset": 0,
+          "slot": "5",
+          "type": "t_bytes32"
+        }
+      ]
+    },
+    "t_struct(ResolutionRule)11364_storage": {
+      "encoding": "inplace",
+      "label": "struct IArenaResolutionVerifier.ResolutionRule",
+      "numberOfBytes": "192",
+      "members": [
+        {
+          "astId": 11349,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "primarySourceId",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 11351,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "witnessSourceId",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 11353,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "sourceEventId",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_bytes32"
+        },
+        {
+          "astId": 11355,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "primarySigner",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_address"
+        },
+        {
+          "astId": 11357,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "witnessSigner",
+          "offset": 0,
+          "slot": "4",
+          "type": "t_address"
+        },
+        {
+          "astId": 11359,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "maxReportAgeSeconds",
+          "offset": 20,
+          "slot": "4",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 11361,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "maxSourceTimestampSkewSeconds",
+          "offset": 0,
+          "slot": "5",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 11363,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "graceSeconds",
+          "offset": 8,
+          "slot": "5",
+          "type": "t_uint64"
+        }
+      ]
+    },
+    "t_struct(RoleData)22_storage": {
+      "encoding": "inplace",
+      "label": "struct AccessControl.RoleData",
+      "numberOfBytes": "64",
+      "members": [
+        {
+          "astId": 19,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "hasRole",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_mapping(t_address,t_bool)"
+        },
+        {
+          "astId": 21,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "adminRole",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_bytes32"
+        }
+      ]
+    },
+    "t_struct(StoredOrder)7098_storage": {
+      "encoding": "inplace",
+      "label": "struct ArenaExchange.StoredOrder",
+      "numberOfBytes": "288",
+      "members": [
+        {
+          "astId": 7088,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "order",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_struct(Order)7085_storage"
+        },
+        {
+          "astId": 7090,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "filledQuantity",
+          "offset": 0,
+          "slot": "6",
+          "type": "t_uint128"
+        },
+        {
+          "astId": 7092,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "reservedCollateral",
+          "offset": 0,
+          "slot": "7",
+          "type": "t_uint256"
+        },
+        {
+          "astId": 7094,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "reservedShares",
+          "offset": 0,
+          "slot": "8",
+          "type": "t_uint128"
+        },
+        {
+          "astId": 7097,
+          "contract": "src/ArenaExchange.sol:ArenaExchange",
+          "label": "status",
+          "offset": 16,
+          "slot": "8",
+          "type": "t_enum(OrderStatus)7041"
+        }
+      ]
+    },
+    "t_uint128": {
+      "encoding": "inplace",
+      "label": "uint128",
+      "numberOfBytes": "16"
+    },
+    "t_uint16": {
+      "encoding": "inplace",
+      "label": "uint16",
+      "numberOfBytes": "2"
+    },
+    "t_uint256": {
+      "encoding": "inplace",
+      "label": "uint256",
+      "numberOfBytes": "32"
+    },
+    "t_uint32": {
+      "encoding": "inplace",
+      "label": "uint32",
+      "numberOfBytes": "4"
+    },
+    "t_uint64": {
+      "encoding": "inplace",
+      "label": "uint64",
+      "numberOfBytes": "8"
+    },
+    "t_uint8": {
+      "encoding": "inplace",
+      "label": "uint8",
+      "numberOfBytes": "1"
+    }
+  }
+}

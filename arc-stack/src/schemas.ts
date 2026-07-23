@@ -13,7 +13,7 @@ const UintString = z.string().regex(/^(0|[1-9][0-9]*)$/);
 const UINT64_MAX = (1n << 64n) - 1n;
 const UINT256_MAX = (1n << 256n) - 1n;
 const Uint256 = UintString.transform(BigInt).refine((value) => value <= UINT256_MAX, "must fit uint256");
-const Bytes32 = z.string().refine((value) => isHex(value, { strict: true }) && value.length === 66, "must be bytes32");
+export const Bytes32Schema = z.string().refine((value) => isHex(value, { strict: true }) && value.length === 66, "must be bytes32");
 const Address = z.string().refine(isAddress, "must be an EVM address").transform((value) => getAddress(value));
 const Outcome = z.number().int().min(0).max(2);
 const PricePpm = UintString.transform(BigInt).refine(
@@ -32,7 +32,7 @@ const FutureUnixTimestamp = UintString.transform(BigInt).refine(
 );
 
 export const PrepareOrderSchema = z.object({
-  marketId: Bytes32,
+  marketId: Bytes32Schema,
   outcome: Outcome,
   side: z.enum(["BUY", "SELL"]),
   pricePpm: PricePpm,
@@ -45,20 +45,20 @@ export const PrepareOrderSchema = z.object({
 export const SubmitOrderSchema = z.object({
   order: z.object({
     maker: Address,
-    marketId: Bytes32,
+    marketId: Bytes32Schema,
     outcome: Outcome,
     isBuy: z.boolean(),
     pricePpm: PricePpm,
     quantity: Quantity,
     expiry: FutureUnixTimestamp,
     nonce: Uint256,
-    clientOrderId: Bytes32,
+    clientOrderId: Bytes32Schema,
   }),
   signature: z.string().refine((value) => isHex(value, { strict: true }), "must be a hex signature"),
 });
 
 export const PrepareCancelSchema = z.object({
-  orderHash: Bytes32,
+  orderHash: Bytes32Schema,
   nonce: Uint256,
   deadline: FutureUnixTimestamp,
 });
@@ -66,7 +66,7 @@ export const PrepareCancelSchema = z.object({
 export const SubmitCancelSchema = z.object({
   cancellation: z.object({
     maker: Address,
-    orderHash: Bytes32,
+    orderHash: Bytes32Schema,
     nonce: Uint256,
     deadline: FutureUnixTimestamp,
   }),
@@ -75,6 +75,7 @@ export const SubmitCancelSchema = z.object({
 
 export const CreateMarketSchema = z.object({
   fixtureId: z.string().trim().min(1).max(256),
+  specHash: Bytes32Schema,
   outcomeCount: z.literal(3),
   closeTime: z.string().datetime({ offset: true }),
   category: z.literal("SPORTS").default("SPORTS"),
@@ -83,9 +84,34 @@ export const CreateMarketSchema = z.object({
   outcomeLabels: z.tuple([z.string().trim().min(1).max(80), z.string().trim().min(1).max(80), z.string().trim().min(1).max(80)])
     .default(["Home", "Draw", "Away"]),
   resolutionRules: z.string().trim().min(1).max(500).default("Regulation-time 1X2 result"),
-});
+  resolutionRule: z.object({
+    primarySourceId: Bytes32Schema,
+    witnessSourceId: Bytes32Schema,
+    sourceEventId: Bytes32Schema,
+    primarySigner: Address,
+    witnessSigner: Address,
+    maxReportAgeSeconds: UintString.transform(BigInt).refine((value) => value > 0n && value <= UINT64_MAX, "must be a positive uint64"),
+    maxSourceTimestampSkewSeconds: UintString.transform(BigInt).refine((value) => value <= UINT64_MAX, "must fit uint64"),
+    graceSeconds: UintString.transform(BigInt).refine((value) => value > 0n && value <= UINT64_MAX, "must be a positive uint64"),
+  }).strict().refine((rule) => rule.primarySourceId !== rule.witnessSourceId, "sources must be independent")
+    .refine((rule) => rule.primarySigner !== rule.witnessSigner, "signers must be independent"),
+}).strict();
 
-export const ResolveMarketSchema = z.object({ winningOutcome: z.number().int().min(0).max(2) });
+export const ResolutionReportSchema = z.object({
+  sourceId: Bytes32Schema,
+  sourceEventId: Bytes32Schema,
+  observedAt: UintString.transform(BigInt).refine((value) => value <= UINT64_MAX, "must fit uint64"),
+  publishedAt: UintString.transform(BigInt).refine((value) => value <= UINT64_MAX, "must fit uint64"),
+  finalResult: z.boolean(),
+  normalizedOutcome: Outcome,
+  rawPayloadHash: Bytes32Schema,
+  signatureEvidence: z.string().refine((value) => isHex(value, { strict: true }) && value.length > 2, "must be a non-empty hex signature"),
+}).strict();
+
+export const ResolveMarketSchema = z.object({
+  primary: ResolutionReportSchema,
+  witness: ResolutionReportSchema,
+}).strict();
 
 export function createArcOrder(
   maker: `0x${string}`,

@@ -11,7 +11,9 @@ const SOURCE_ID_PATTERN = /^[a-z][a-z0-9.-]{1,63}$/;
 const FIXTURE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const FIELD_PATH_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*$/;
 
-export const ARC_EXCHANGE_ADDRESS = getAddress("0x1457B0E54f697E9662E1678b74f545CFCe17e96a");
+export const ARC_EXCHANGE_V2_ADDRESS = getAddress("0x1457B0E54f697E9662E1678b74f545CFCe17e96a");
+export const ARC_EXCHANGE_V3_ADDRESS = getAddress("0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071");
+export const ARC_EXCHANGE_ADDRESS = ARC_EXCHANGE_V3_ADDRESS;
 export const ARC_MARKET_ID_HASH_DOMAIN = "air-arena/arc/market-id/v1\0";
 export const ARC_MARKET_SPEC_HASH_DOMAIN = "air-arena/arc/market-spec/v1\0";
 
@@ -155,7 +157,7 @@ export const ArcMarketSpecDraftSchema = z.object({
     network: z.literal("arc-testnet"),
     chainId: z.literal(ARC_CHAIN_ID),
     exchangeAddress: AddressSchema,
-    contractVersion: z.literal("arena-exchange-v2"),
+    contractVersion: z.enum(["arena-exchange-v2", "arena-exchange-v3"]),
   }).strict(),
   marketNonce: Uint256StringSchema,
   category: z.literal("SPORTS"),
@@ -219,8 +221,11 @@ function validateTemplate(spec: ArcMarketSpecDraft): void {
 }
 
 function validateSemantics(spec: ArcMarketSpecDraft): void {
-  if (spec.chain.exchangeAddress !== ARC_EXCHANGE_ADDRESS) {
-    validationError("WRONG_EXCHANGE", "chain.exchangeAddress", "exchange does not match the signed ARC beta scope");
+  const expectedExchange = spec.chain.contractVersion === "arena-exchange-v2"
+    ? ARC_EXCHANGE_V2_ADDRESS
+    : ARC_EXCHANGE_V3_ADDRESS;
+  if (spec.chain.exchangeAddress !== expectedExchange) {
+    validationError("WRONG_EXCHANGE", "chain.exchangeAddress", "exchange does not match the declared frozen contract version");
   }
   if (spec.collateral.tokenAddress !== getAddress(ARC_USDC_ADDRESS)) {
     validationError("WRONG_COLLATERAL", "collateral.tokenAddress", "token does not match ARC Testnet USDC");

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { failJob, type ArcJob } from "../src/jobs.js";
+import { failJob, requeueRestartableJob, type ArcJob } from "../src/jobs.js";
 import type { Database } from "../src/db.js";
 
 function job(attempts: number): ArcJob {
@@ -41,6 +41,21 @@ describe("failJob", () => {
       "FAILED",
       "rpc_timeout",
       2,
+    ]);
+  });
+
+  it("requeues a restartable on-chain batch after the retry ceiling without releasing it", async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1 });
+    await requeueRestartableJob(
+      { query } as unknown as Database,
+      "00000000-0000-0000-0000-000000000001",
+      "restartable_chain_batch:rpc_timeout",
+    );
+
+    expect(query).toHaveBeenCalledOnce();
+    expect(query.mock.calls[0]![1]).toEqual([
+      "00000000-0000-0000-0000-000000000001",
+      "restartable_chain_batch:rpc_timeout",
     ]);
   });
 });

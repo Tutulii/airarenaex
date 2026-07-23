@@ -65,7 +65,21 @@ describe("trusted TxLINE outcomes", () => {
   });
 
   it("restricts autonomously settled fixture markets to explicit three-outcome 1X2", () => {
-    const base = { fixtureId: "18257865", closeTime: "2026-07-22T00:00:00.000Z" };
+    const base = {
+      fixtureId: "18257865",
+      specHash: `0x${"11".repeat(32)}`,
+      closeTime: "2027-07-22T00:00:00.000Z",
+      resolutionRule: {
+        primarySourceId: `0x${"12".repeat(32)}`,
+        witnessSourceId: `0x${"13".repeat(32)}`,
+        sourceEventId: `0x${"14".repeat(32)}`,
+        primarySigner: "0x00000000000000000000000000000000000000A1",
+        witnessSigner: "0x00000000000000000000000000000000000000A2",
+        maxReportAgeSeconds: "120",
+        maxSourceTimestampSkewSeconds: "30",
+        graceSeconds: "900",
+      },
+    };
     const parsed = CreateMarketSchema.safeParse({ ...base, outcomeCount: 3 });
     expect(parsed.success).toBe(true);
     if (parsed.success) {

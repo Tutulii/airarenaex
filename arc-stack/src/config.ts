@@ -31,6 +31,8 @@ const EnvironmentSchema = z.object({
   ARC_USDC_ADDRESS: AddressSchema.default(ARC_USDC_ADDRESS),
   ARC_EXCHANGE_ADDRESS: OptionalAddressSchema,
   ARC_RELAYER_PRIVATE_KEY: OptionalPrivateKeySchema,
+  ARC_UPGRADE_MULTISIG_PRIVATE_KEY: OptionalPrivateKeySchema,
+  ARC_SEQUENCER_PRIVATE_KEY: OptionalPrivateKeySchema,
   ARC_MARKET_ADMIN_PRIVATE_KEY: OptionalPrivateKeySchema,
   ARC_MATCHER_PRIVATE_KEY: OptionalPrivateKeySchema,
   ARC_RESOLVER_PRIVATE_KEY: OptionalPrivateKeySchema,
@@ -63,8 +65,8 @@ export type ArcConfig = {
   usdcAddress: Address;
   exchangeAddress?: Address;
   relayerPrivateKey?: `0x${string}`;
-  marketAdminPrivateKey?: `0x${string}`;
-  matcherPrivateKey?: `0x${string}`;
+  upgradeMultisigPrivateKey?: `0x${string}`;
+  sequencerPrivateKey?: `0x${string}`;
   resolverPrivateKey?: `0x${string}`;
   receiptSignerPrivateKey?: `0x${string}`;
   receiptSignerKeyId: string;
@@ -98,8 +100,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ArcConfig {
   if (parsed.SERVICE_ROLE === "middleman" && parsed.NODE_ENV === "production") {
     if (!parsed.ARC_EXCHANGE_ADDRESS) throw new Error("ARC_EXCHANGE_ADDRESS is required for middleman production");
     if (!parsed.ARC_RELAYER_PRIVATE_KEY) throw new Error("ARC_RELAYER_PRIVATE_KEY is required for middleman production");
-    if (!parsed.ARC_MARKET_ADMIN_PRIVATE_KEY) throw new Error("ARC_MARKET_ADMIN_PRIVATE_KEY is required for middleman production");
-    if (!parsed.ARC_MATCHER_PRIVATE_KEY) throw new Error("ARC_MATCHER_PRIVATE_KEY is required for middleman production");
+    if (!(parsed.ARC_UPGRADE_MULTISIG_PRIVATE_KEY ?? parsed.ARC_MARKET_ADMIN_PRIVATE_KEY)) {
+      throw new Error("ARC_UPGRADE_MULTISIG_PRIVATE_KEY is required for middleman production");
+    }
+    if (!(parsed.ARC_SEQUENCER_PRIVATE_KEY ?? parsed.ARC_MATCHER_PRIVATE_KEY)) {
+      throw new Error("ARC_SEQUENCER_PRIVATE_KEY is required for middleman production");
+    }
     if (!parsed.ARC_RESOLVER_PRIVATE_KEY) throw new Error("ARC_RESOLVER_PRIVATE_KEY is required for middleman production");
     if (!parsed.TXLINE_SOURCE_URL.startsWith("https://")) {
       throw new Error("TXLINE_SOURCE_URL must use HTTPS in middleman production");
@@ -139,8 +145,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ArcConfig {
   if (parsed.DATABASE_URL) config.databaseUrl = parsed.DATABASE_URL;
   if (parsed.ARC_EXCHANGE_ADDRESS) config.exchangeAddress = parsed.ARC_EXCHANGE_ADDRESS;
   if (parsed.ARC_RELAYER_PRIVATE_KEY) config.relayerPrivateKey = parsed.ARC_RELAYER_PRIVATE_KEY as `0x${string}`;
-  if (parsed.ARC_MARKET_ADMIN_PRIVATE_KEY) config.marketAdminPrivateKey = parsed.ARC_MARKET_ADMIN_PRIVATE_KEY as `0x${string}`;
-  if (parsed.ARC_MATCHER_PRIVATE_KEY) config.matcherPrivateKey = parsed.ARC_MATCHER_PRIVATE_KEY as `0x${string}`;
+  const upgradeMultisigPrivateKey = parsed.ARC_UPGRADE_MULTISIG_PRIVATE_KEY ?? parsed.ARC_MARKET_ADMIN_PRIVATE_KEY;
+  const sequencerPrivateKey = parsed.ARC_SEQUENCER_PRIVATE_KEY ?? parsed.ARC_MATCHER_PRIVATE_KEY;
+  if (upgradeMultisigPrivateKey) config.upgradeMultisigPrivateKey = upgradeMultisigPrivateKey as `0x${string}`;
+  if (sequencerPrivateKey) config.sequencerPrivateKey = sequencerPrivateKey as `0x${string}`;
   if (parsed.ARC_RESOLVER_PRIVATE_KEY) config.resolverPrivateKey = parsed.ARC_RESOLVER_PRIVATE_KEY as `0x${string}`;
   if (parsed.ARC_RECEIPT_SIGNER_PRIVATE_KEY) config.receiptSignerPrivateKey = parsed.ARC_RECEIPT_SIGNER_PRIVATE_KEY as `0x${string}`;
   if (parsed.ARC_OPERATOR_TOKEN) config.operatorToken = parsed.ARC_OPERATOR_TOKEN;

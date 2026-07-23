@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AIR Arena Exchange — Days 15–18 Production Review</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background:#08100f; color:#eaf3f0; }
+    body { margin:0; padding:48px 24px; } main { max-width:1100px; margin:auto; }
+    h1 { font-size:42px; margin:0 0 8px; } h2 { margin-top:38px; color:#6ce0cb; }
+    .lede { color:#a9b9b6; font-size:18px; } .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; }
+    .card { background:#101a19; border:1px solid #263b37; border-radius:14px; padding:20px; }
+    .grade { font-size:36px; font-weight:800; color:#6ce0cb; } .ok { color:#79e08b; } .risk { color:#f4c46a; }
+    code { color:#9eeadc; } table { width:100%; border-collapse:collapse; background:#101a19; }
+    th,td { text-align:left; padding:12px; border-bottom:1px solid #263b37; vertical-align:top; }
+    th { color:#6ce0cb; } footer { margin-top:38px; color:#80908d; }
+  </style>
+</head>
+<body><main>
+  <p class="lede">ARC TESTNET · CHAIN 5042002 · REVIEWED 2026-07-23</p>
+  <h1>ArenaExchange V3 — Days 15–18</h1>
+  <p class="lede">Frozen contract surface, continuously solvent custody, restartable committed batches, and evidence-bound resolution.</p>
+  <div class="grid">
+    <section class="card"><div class="grade">A-</div><strong>Security</strong><p>No known Day 1–18 correctness defect after the complete regression gate.</p></section>
+    <section class="card"><div class="grade">A-</div><strong>Quality</strong><p>Frozen ABI/storage artifacts, deterministic state machines, integer accounting, and replayable evidence.</p></section>
+    <section class="card"><div class="grade ok">127</div><strong>Fresh tests</strong><p>23 Forge + 81 backend + 5 SDK + 18 Day 3 tests; Day 1/2 gates separately green.</p></section>
+    <section class="card"><div class="grade risk">0 B</div><strong>Runtime margin</strong><p>V3 is exactly at EIP-170. It must remain frozen; future features require V4 or an audited module split.</p></section>
+  </div>
+  <h2>Exit gates</h2>
+  <table><thead><tr><th>Day</th><th>Result</th><th>Evidence</th></tr></thead><tbody>
+    <tr><td>15</td><td class="ok">DONE</td><td>Fresh ABI/storage output matches checked-in artifacts; 5/5 role/domain/chain tests.</td></tr>
+    <tr><td>16</td><td class="ok">DONE</td><td>8 custody/reentrancy tests including 1,000 solvency fuzz runs.</td></tr>
+    <tr><td>17</td><td class="ok">DONE</td><td>5 lifecycle tests including 2,000 randomized conservation/restart fuzz runs.</td></tr>
+    <tr><td>18</td><td class="ok">DONE</td><td>5 evidence, invalidation, replay, and exact-payout tests.</td></tr>
+  </tbody></table>
+  <h2>Deployment</h2>
+  <div class="card"><p>Exchange: <code>0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071</code></p><p>Resolution verifier: <code>0x9fadda17E713a4216FcA32190975cb6F6cb80ABb</code></p><p>Collateral: official Arc 6-decimal USDC only.</p></div>
+  <h2>Review finding</h2>
+  <div class="card"><strong class="risk">Medium — zero bytecode margin</strong><p>ArenaExchange is exactly 24,576 runtime bytes. The specific fix is operational: keep V3 frozen and deploy a formally migrated V4 or audited module split for any later contract feature. Do not append code to V3.</p></div>
+  <h2>Mainnet boundary</h2>
+  <p>The Days 15–18 implementation is production-engineered for the capped Arc Testnet beta. The signed launch gate correctly keeps public mainnet blocked pending later-roadmap independent audit, managed signers, timelock, load/chaos evidence, legal approval, and soak.</p>
+  <footer>Detailed command evidence: <code>docs/reviews/arc-days-15-18-verification-2026-07-23.md</code></footer>
+</main></body></html>

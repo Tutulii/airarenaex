@@ -15,7 +15,7 @@
   "betaConstraints": {
     "network": "arc-testnet",
     "chainId": 5042002,
-    "exchangeAddress": "0xEad589fA1b8BE258F47D3601B0c39238A364139b",
+    "exchangeAddress": "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071",
     "allowlistRequired": true,
     "depositCapsRequired": true,
     "realWorldValueRequired": false,
@@ -115,8 +115,8 @@
     {"blockerId": "LG-01-JURISDICTION", "ownerDomain": "legal", "state": "open", "description": "No written jurisdiction-specific classification or licensing determination exists."},
     {"blockerId": "LG-02-PRIVACY", "ownerDomain": "privacy-data-protection", "state": "open", "description": "Privacy, retention, processor, cross-border and breach obligations are not approved."},
     {"blockerId": "LG-03-INDEPENDENT-AUDIT", "ownerDomain": "security", "state": "open", "description": "ArenaExchange and its deployed runtime bytecode have not received a closed independent Solidity audit."},
-    {"blockerId": "LG-04-CUSTODY-PROOF", "ownerDomain": "protocol-custody", "state": "open", "description": "Complete-set, reservation, role, USDC, solvency, batch and payout invariants are not yet fully proven for the target architecture."},
-    {"blockerId": "LG-05-FAIR-ORDERING", "ownerDomain": "security", "state": "open", "description": "The deterministic frequent-batch auction and its replay/fair-ordering evidence are not yet complete."},
+    {"blockerId": "LG-04-CUSTODY-PROOF", "ownerDomain": "protocol-custody", "state": "resolved", "description": "Complete-set, reservation, role, USDC, solvency, batch and payout invariants are enforced by ArenaExchange V3 and its Day 15-18 Foundry suite.", "codeEvidence": ["arc-stack/contracts/src/ArenaExchange.sol", "arc-stack/contracts/test/ArenaExchange.t.sol:ArenaExchangeDay16Test", "arc-stack/contracts/test/ArenaExchange.t.sol:ArenaExchangeReentrancyTest"]},
+    {"blockerId": "LG-05-FAIR-ORDERING", "ownerDomain": "security", "state": "resolved", "description": "The deterministic frequent-batch auction, commitment, replay and restart behavior are covered by the Day 10-12 service tests and Day 17 contract tests.", "codeEvidence": ["arc-stack/src/clearing.ts", "arc-stack/src/batch.ts", "arc-stack/contracts/test/ArenaExchange.t.sol:ArenaExchangeDay17Test"]},
     {"blockerId": "LG-06-KEY-CUSTODY", "ownerDomain": "security", "state": "open", "description": "Managed non-exportable service signers, hardware multisig membership and rotation evidence are incomplete."},
     {"blockerId": "LG-07-LIVE-EVIDENCE", "ownerDomain": "operations", "state": "open", "description": "The required load, chaos, restore, failover and 48-hour ARC Testnet soak evidence does not exist."},
     {"blockerId": "LG-08-RELEASE-PROVENANCE", "ownerDomain": "release-artifact", "state": "open", "description": "An approved reproducible artifact, SBOM, bytecode attestation, provenance and signed go-no-go record do not exist."},
@@ -124,9 +124,9 @@
     {
       "blockerId": "LG-10-RESOLVER-EVIDENCE-BINDING",
       "ownerDomain": "protocol-custody",
-      "state": "open",
-      "description": "The current ARC contract accepts an in-range caller-supplied winning outcome without binding source evidence and MarketSpec derivation on-chain.",
-      "codeEvidence": ["arc-stack/contracts/src/ArenaExchange.sol:resolveMarket", "arc-stack/src/middleman.ts:functionName=resolveMarket"]
+      "state": "resolved",
+      "description": "ArenaExchange V3 accepts only two authenticated ResolutionReport envelopes bound to marketId, immutable specHash, source identity, event identity and the versioned EIP-712 domain; invalid quorum resolves to INVALID.",
+      "codeEvidence": ["arc-stack/contracts/src/ArenaExchange.sol:resolveMarket", "arc-stack/contracts/src/ArenaResolutionVerifier.sol:verify", "arc-stack/contracts/test/ArenaExchange.t.sol:ArenaExchangeDay18Test"]
     },
     {
       "blockerId": "LG-11-SERVICE-KEY-CUSTODY",
@@ -138,8 +138,8 @@
     {
       "blockerId": "LG-12-PAUSER-RESUME",
       "ownerDomain": "protocol-custody",
-      "state": "open",
-      "description": "The current PAUSER_ROLE can both pause and unpause, violating the signed pause/recovery separation-of-duties design.",
+      "state": "resolved",
+      "description": "EMERGENCY_PAUSER_ROLE can only pause; only the independent UPGRADE_MULTISIG_ROLE can unpause, and cross-role calls are tested.",
       "codeEvidence": ["arc-stack/contracts/src/ArenaExchange.sol:pause", "arc-stack/contracts/src/ArenaExchange.sol:unpause"]
     },
     {
@@ -174,8 +174,8 @@
   "technicalApproval": {
     "status": "approved",
     "approvedBy": "AIR Arena project owner",
-    "approvedAt": "2026-07-21T09:27:12Z",
-    "approvalReference": "conversation:2026-07-21:complete-arc-days-1-3",
+    "approvedAt": "2026-07-23T11:36:44Z",
+    "approvalReference": "conversation:2026-07-23:deploy-and-verify-days-15-18",
     "meaning": "The fail-closed launch checkpoint design is approved; no legal or public-mainnet approval is granted."
   }
 }

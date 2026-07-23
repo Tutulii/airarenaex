@@ -13,6 +13,7 @@ import {
 } from "../src/idempotency.js";
 import { createLogger } from "../src/logger.js";
 import { appendOrderEvent, createAcceptanceReceipt } from "../src/order-intake.js";
+import { resetArcTestData } from "./postgres-test-db.js";
 
 const databaseUrl = process.env.ARC_TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -42,6 +43,7 @@ integration("PostgreSQL durable intake and batch integration", () => {
     db = new pg.Pool({ connectionString: databaseUrl, max: 8 });
     await migrateDatabase(db, createLogger({ logLevel: "silent", serviceRole: "api" }));
     await bindDatabaseToExchange(db, config.chainId, exchange);
+    await resetArcTestData(db);
     await db.query(
       `INSERT INTO arc_markets(
          market_id, fixture_id, external_id_hash, outcome_count, close_time, status, oracle_reference
@@ -61,6 +63,26 @@ integration("PostgreSQL durable intake and batch integration", () => {
       config.chainId,
       getAddress("0x00000000000000000000000000000000000000b2"),
     )).rejects.toThrow("database_exchange_binding_mismatch");
+  });
+
+  it("keeps normalized resolution evidence append-only", async () => {
+    const digest = hash(880);
+    await db.query(
+      `INSERT INTO arc_resolution_reports(
+         report_digest, market_id, source_index, source_id, source_event_id,
+         observed_at, published_at, final_result, normalized_outcome,
+         raw_payload_hash, signature_evidence
+       ) VALUES ($1,$2,0,'TXLINE','integration-fixture',1,1,true,0,$3,'0x1234')`,
+      [digest, marketId, hash(881)],
+    );
+    await expect(db.query(
+      "UPDATE arc_resolution_reports SET normalized_outcome = 1 WHERE report_digest = $1",
+      [digest],
+    )).rejects.toThrow(/immutable_relation:arc_resolution_reports/);
+    await expect(db.query(
+      "DELETE FROM arc_resolution_reports WHERE report_digest = $1",
+      [digest],
+    )).rejects.toThrow(/immutable_relation:arc_resolution_reports/);
   });
 
   it("persists immutable receipts and crash-safe assignments, then seals one uniform-price auction", async () => {

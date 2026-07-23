@@ -59,6 +59,18 @@ describe("AIR Arena ARC MarketSpec v1", () => {
     expect(deriveArcSpecHash(vector.draft)).toBe(vector.expected.specHash);
   });
 
+  it("binds new specifications to the deployed frozen V3 address without changing the V2 vector", () => {
+    const v3 = draft();
+    v3.chain.contractVersion = "arena-exchange-v3";
+    v3.chain.exchangeAddress = "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071";
+    const finalized = finalizeArcMarketSpec(v3);
+    expect(finalized.chain.contractVersion).toBe("arena-exchange-v3");
+    expect(finalized.chain.exchangeAddress).toBe("0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071");
+    expect(finalized.marketId).not.toBe(vector.expected.marketId);
+    expect(finalized.specHash).not.toBe(vector.expected.specHash);
+    expect(finalizeArcMarketSpec(vector.draft).specHash).toBe(vector.expected.specHash);
+  });
+
   it("produces identical hashes for semantically equivalent key and set ordering", () => {
     const reordered = draft();
     reordered.outcomes.reverse();

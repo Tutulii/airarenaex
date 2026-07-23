@@ -821,19 +821,28 @@ export async function buildApi(dependencies: ApiDependencies) {
       await client.query(
         `INSERT INTO arc_markets(
            market_id, fixture_id, external_id_hash, outcome_count, close_time, status, settlement_policy,
-           category, oracle_source, oracle_reference, display_title, outcome_labels, resolution_rules
-         ) VALUES ($1,$2,$3,$4,$5,'QUEUED','TXLINE_1X2_REGULATION',$6,$7,$8,$9,$10::jsonb,$11)
+           category, oracle_source, oracle_reference, display_title, outcome_labels, resolution_rules,
+           spec_hash, resolution_rule
+         ) VALUES ($1,$2,$3,$4,$5,'QUEUED','TXLINE_1X2_REGULATION',$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb)
          ON CONFLICT (market_id) DO NOTHING`,
         [
           identifiers.marketId, input.fixtureId, identifiers.externalIdHash, input.outcomeCount, closeTime,
           input.category, input.oracleSource, input.fixtureId, input.displayTitle ?? null,
-          JSON.stringify(input.outcomeLabels), input.resolutionRules,
+          JSON.stringify(input.outcomeLabels), input.resolutionRules, input.specHash,
+          JSON.stringify(serializeUnknown(input.resolutionRule)),
         ],
       );
       const job = await enqueueJob(
         client,
         "CREATE_MARKET",
-        { ...identifiers, fixtureId: input.fixtureId, outcomeCount: input.outcomeCount, closeTime: Math.floor(closeTime.getTime() / 1000).toString() },
+        serializeUnknown({
+          ...identifiers,
+          fixtureId: input.fixtureId,
+          specHash: input.specHash,
+          outcomeCount: input.outcomeCount,
+          closeTime: Math.floor(closeTime.getTime() / 1000).toString(),
+          resolutionRule: input.resolutionRule,
+        }) as Record<string, unknown>,
         `create-market:${identifiers.marketId}`,
       );
       await client.query("COMMIT");
@@ -853,8 +862,12 @@ export async function buildApi(dependencies: ApiDependencies) {
     const job = await enqueueJob(
       db,
       "RESOLVE_MARKET",
-      { marketId: request.params.marketId, winningOutcome: input.winningOutcome },
+      serializeUnknown({ marketId: request.params.marketId, primary: input.primary, witness: input.witness }) as Record<string, unknown>,
       `resolve-market:${request.params.marketId}:${idempotencyKey(request)}`,
+    );
+    await db.query(
+      "UPDATE arc_markets SET resolution_job_id = $2, updated_at = now() WHERE market_id = $1 AND status = 'OPEN'",
+      [request.params.marketId, job.id],
     );
     return reply.status(job.created ? 202 : 200).send({ success: true, data: { job } });
   });
@@ -864,7 +877,7 @@ export async function buildApi(dependencies: ApiDependencies) {
     if (!isHex(request.params.marketId, { strict: true }) || request.params.marketId.length !== 66) throw new Error("invalid_market_id");
     const job = await enqueueJob(
       db,
-      "INVALIDATE_MARKET",
+      "INVALIDATE_AFTER_GRACE",
       { marketId: request.params.marketId },
       `invalidate-market:${request.params.marketId}:${idempotencyKey(request)}`,
     );

@@ -67,7 +67,7 @@ describe("AIR Arena Day 3 security model", () => {
     expectFailure(/abuseCases must contain at least 20 item/);
   });
 
-  it("records the current ARC resolver and service-key paths as critical release blockers", () => {
+  it("records the evidence-bound resolver and remaining service-key release blocker", () => {
     const threatIds = new Set(artifacts.threat.abuseCases.map((threat) => threat.threatId));
     const blockerIds = new Set(artifacts.launch.hardBlockers.map((blocker) => blocker.blockerId));
     assert(threatIds.has("TM-19-RESOLVER-CALLER-OUTCOME"));
@@ -85,10 +85,10 @@ describe("AIR Arena Day 3 security model", () => {
     expectFailure(/TM-19-RESOLVER-CALLER-OUTCOME.codeEvidence/);
   });
 
-  it("fails if the verified resolver code boundary changes without a threat-model update", () => {
+  it("fails if the verified evidence-bound resolver code boundary changes without a threat-model update", () => {
     artifacts.arcContract = artifacts.arcContract.replace(
-      "function resolveMarket(bytes32 marketId, uint8 winningOutcome) external onlyRole(RESOLVER_ROLE)",
-      "function resolveMarket(bytes32 marketId, uint8 winningOutcome) external"
+      "IArenaResolutionVerifier.ResolutionReport calldata primary",
+      "uint8 callerSelectedOutcome"
     );
     expectFailure(/current ARC contract evidence changed/);
   });

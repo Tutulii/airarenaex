@@ -50,7 +50,7 @@
   },
   "productBoundary": {
     "exchangeContract": "ArenaExchange",
-    "exchangeAddress": "0xEad589fA1b8BE258F47D3601B0c39238A364139b",
+    "exchangeAddress": "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071",
     "apiService": "airarena-arc-api",
     "apiSurface": "/v1",
     "mcpService": "airarena-arc-mcp",
@@ -83,7 +83,7 @@
   "approval": {
     "status": "approved",
     "approvedBy": "AIR Arena project owner",
-    "approvedAt": "2026-07-21T09:27:12Z",
-    "approvalReference": "conversation:2026-07-21:complete-arc-days-1-3"
+    "approvedAt": "2026-07-23T11:36:44Z",
+    "approvalReference": "conversation:2026-07-23:deploy-and-verify-days-15-18"
   }
 }

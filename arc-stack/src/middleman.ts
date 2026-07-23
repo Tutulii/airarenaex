@@ -4,8 +4,12 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import {
   decodeEventLog,
+  concatHex,
+  encodeAbiParameters,
   getAddress,
   isHex,
+  keccak256,
+  parseAbiItem,
   type Hex,
   type Log,
 } from "viem";
@@ -26,7 +30,15 @@ import {
   type Database,
   type DatabaseClient,
 } from "./db.js";
-import { claimNextJob, completeJob, enqueueJob, failJob, recoverAbandonedJobs, type ArcJob } from "./jobs.js";
+import {
+  claimNextJob,
+  completeJob,
+  enqueueJob,
+  failJob,
+  recoverAbandonedJobs,
+  requeueRestartableJob,
+  type ArcJob,
+} from "./jobs.js";
 import type { Logger } from "./logger.js";
 import { createMetrics } from "./metrics.js";
 import { resultWatcherReady, runResultWatcher } from "./settlement-watcher.js";
@@ -75,16 +87,36 @@ const ExecuteBatchPayload = z.object({
 });
 const CreateMarketPayload = z.object({
   marketId: Hex32,
+  specHash: Hex32,
   externalIdHash: Hex32,
   fixtureId: z.string().min(1),
   outcomeCount: z.number().int().min(2).max(3),
   closeTime: UintString,
+  resolutionRule: z.object({
+    primarySourceId: Hex32,
+    witnessSourceId: Hex32,
+    sourceEventId: Hex32,
+    primarySigner: z.string(),
+    witnessSigner: z.string(),
+    maxReportAgeSeconds: UintString,
+    maxSourceTimestampSkewSeconds: UintString,
+    graceSeconds: UintString,
+  }),
+});
+const ResolutionReportPayload = z.object({
+  sourceId: Hex32,
+  sourceEventId: Hex32,
+  observedAt: UintString,
+  publishedAt: UintString,
+  finalResult: z.boolean(),
+  normalizedOutcome: z.number().int().min(0).max(2),
+  rawPayloadHash: Hex32,
+  signatureEvidence: z.string().refine((value) => isHex(value, { strict: true }) && value.length > 2),
 });
 const ResolveMarketPayload = z.object({
   marketId: Hex32,
-  winningOutcome: z.number().int().min(0).max(2),
-  fixtureId: z.string().min(1).optional(),
-  evidenceHash: Hex32.optional(),
+  primary: ResolutionReportPayload,
+  witness: ResolutionReportPayload,
 });
 const InvalidateMarketPayload = z.object({ marketId: Hex32 });
 const ExecuteMatchPayload = z.object({
@@ -117,6 +149,126 @@ function serialize(value: unknown): unknown {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+type LegacyMatch = { buyOrderHash: Hex; sellOrderHash: Hex; quantity: bigint };
+
+function legacyBatchCommitment(
+  marketId: Hex,
+  outcome: number,
+  clearingPricePpm: bigint,
+  matches: LegacyMatch[],
+): Hex {
+  return keccak256(encodeAbiParameters(
+    [
+      { type: "string" },
+      { type: "bytes32" },
+      { type: "uint8" },
+      { type: "uint64" },
+      {
+        type: "tuple[]",
+        components: [
+          { name: "buyOrderHash", type: "bytes32" },
+          { name: "sellOrderHash", type: "bytes32" },
+          { name: "quantity", type: "uint128" },
+        ],
+      },
+    ],
+    ["AIR_ARENA_LEGACY_BATCH_V1", marketId, outcome, clearingPricePpm, matches],
+  ));
+}
+
+async function ensureLegacyBatchCommitment(
+  publicClient: ReturnType<typeof createArcPublicClient>,
+  walletClient: ReturnType<typeof createArcWalletClient>,
+  exchangeAddress: Hex,
+  account: NonNullable<ReturnType<typeof createArcWalletClient>["account"]>,
+  commitment: Hex,
+): Promise<void> {
+  let publishedAt = await publicClient.readContract({
+    address: exchangeAddress,
+    abi: arenaExchangeAbi,
+    functionName: "publishedDataCommitments",
+    args: [commitment],
+  });
+  if (publishedAt === 0n) {
+    const simulation = await publicClient.simulateContract({
+      account,
+      address: exchangeAddress,
+      abi: arenaExchangeAbi,
+      functionName: "publishDataCommitment",
+      args: [commitment],
+    });
+    const hash = await walletClient.writeContract(simulation.request);
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1, timeout: 30_000 });
+    if (receipt.status !== "success") throw new Error(`commitment_transaction_reverted:${hash}`);
+    publishedAt = receipt.blockNumber;
+  }
+  const deadline = Date.now() + 30_000;
+  while (await publicClient.getBlockNumber() <= publishedAt) {
+    if (Date.now() >= deadline) throw new Error("commitment_prior_block_timeout");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+const batchStatusEvent = parseAbiItem(
+  "event BatchStatusChanged(bytes32 indexed batchId, bytes32 indexed marketId, uint64 indexed sequence, uint8 status)",
+);
+
+function hashPair(left: Hex, right: Hex): Hex {
+  return keccak256(concatHex(left.toLowerCase() <= right.toLowerCase() ? [left, right] : [right, left]));
+}
+
+function merkleTree(leaves: Hex[]): { root: Hex; proofs: Hex[][] } {
+  if (!leaves.length) throw new Error("empty_onchain_match_tree");
+  const layers: Hex[][] = [[...leaves]];
+  while (layers[layers.length - 1]!.length > 1) {
+    const current = layers[layers.length - 1]!;
+    const next: Hex[] = [];
+    for (let index = 0; index < current.length; index += 2) {
+      next.push(hashPair(current[index]!, current[index + 1] ?? current[index]!));
+    }
+    layers.push(next);
+  }
+  const proofs = leaves.map((_leaf, leafIndex) => {
+    const proof: Hex[] = [];
+    let index = leafIndex;
+    for (let layer = 0; layer < layers.length - 1; layer += 1) {
+      const values = layers[layer]!;
+      const sibling = index ^ 1;
+      proof.push(values[sibling] ?? values[index]!);
+      index = Math.floor(index / 2);
+    }
+    return proof;
+  });
+  return { root: layers[layers.length - 1]![0]!, proofs };
+}
+
+async function latestBatchStatus(
+  publicClient: ReturnType<typeof createArcPublicClient>,
+  exchangeAddress: Hex,
+  batchId: Hex,
+  fromBlock: bigint,
+): Promise<number> {
+  const logs = await publicClient.getLogs({
+    address: exchangeAddress,
+    event: batchStatusEvent,
+    args: { batchId },
+    fromBlock,
+    toBlock: "latest",
+  });
+  return logs.length ? Number(logs[logs.length - 1]!.args.status) : 0;
+}
+
+async function sendChecked(
+  publicClient: ReturnType<typeof createArcPublicClient>,
+  walletClient: ReturnType<typeof createArcWalletClient>,
+  request: Parameters<typeof walletClient.writeContract>[0],
+): Promise<Hex> {
+  const hash = await walletClient.writeContract(request);
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1, timeout: 30_000 });
+  if (receipt.status !== "success") throw new Error(`transaction_reverted:${hash}`);
+  return hash;
 }
 
 async function projectExecutedMatch(db: Database, job: ArcJob, payload: z.infer<typeof ExecuteMatchPayload>) {
@@ -346,82 +498,182 @@ async function executePersistedBatch(
   }
   if (batchState.status !== "EXECUTING") throw new Error(`batch_not_executable:${batchState.status}`);
   const publicClient = createArcPublicClient(config);
-  const walletClient = createArcWalletClient(config, config.matcherPrivateKey);
+  const walletClient = createArcWalletClient(config, config.sequencerPrivateKey);
   const account = walletClient.account;
-  if (!account) throw new Error("matcher_account_unavailable");
+  if (!account) throw new Error("sequencer_account_unavailable");
   const chunks = await loadPendingBatchChunks(db, payload.batchId as Hex, BigInt(payload.fencingToken));
   if (chunks.length > 1 || (chunks[0] && chunks[0].chunkIndex !== 0)) {
     throw new Error("non_atomic_batch_execution_rejected");
   }
-  let lastHash: Hex | null = null;
+  const chunk = chunks[0];
+  if (!chunk) throw new Error("batch_chunk_missing");
+  const publication = await db.query<{
+    order_root: Hex;
+    bundle_hash: Hex;
+    chain_batch_id: Hex | null;
+    chain_sequence: string | null;
+    chain_prior_root: Hex | null;
+  }>(
+    `SELECT p.order_root, p.bundle_hash, b.chain_batch_id, b.chain_sequence::text, b.chain_prior_root
+       FROM arc_batch_publications p JOIN arc_batches b ON b.batch_id = p.batch_id
+      WHERE p.batch_id = $1`,
+    [payload.batchId],
+  );
+  const published = publication.rows[0];
+  if (!published) throw new Error("batch_publication_missing");
 
-  for (const chunk of chunks) {
-    await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "RUNNING");
-    try {
-      const bounds = new Map<string, { hash: Hex; before: bigint; after: bigint }>();
-      for (const fill of chunk.fills) {
-        for (const [hash, before] of [
-          [fill.buyOrderHash, fill.buyFilledBefore],
-          [fill.sellOrderHash, fill.sellFilledBefore],
-        ] as const) {
-          const key = hash.toLowerCase();
-          const after = before + fill.quantity;
-          const existing = bounds.get(key);
-          bounds.set(key, {
-            hash,
-            before: existing && existing.before < before ? existing.before : before,
-            after: existing && existing.after > after ? existing.after : after,
-          });
-        }
-      }
-      const states = await Promise.all([...bounds.values()].map(async (bound) => ({
-        bound,
-        stored: await publicClient.readContract({
-          address: config.exchangeAddress!,
-          abi: arenaExchangeAbi,
-          functionName: "getOrder",
-          args: [bound.hash],
-        }),
-      })));
-      if (states.every(({ bound, stored }) => stored.filledQuantity >= bound.after)) {
-        await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "SUCCEEDED");
-        logger.warn({ batchId: chunk.batchId, chunkIndex: chunk.chunkIndex }, "arc_batch_chunk_recovered_from_chain");
-        continue;
-      }
-      if (states.some(({ bound, stored }) => stored.filledQuantity !== bound.before || Number(stored.status) !== 1)) {
-        throw new Error("batch_chunk_prestate_changed");
+  const sequence = published.chain_sequence === null
+    ? await publicClient.readContract({
+      address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "nextBatchSequence", args: [chunk.marketId],
+    })
+    : BigInt(published.chain_sequence);
+  const priorRoot = published.chain_prior_root ?? await publicClient.readContract({
+    address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "lastFinalizedLedgerRoot", args: [chunk.marketId],
+  });
+  const derivedChainBatchId = keccak256(encodeAbiParameters(
+    [{ type: "bytes32" }, { type: "uint64" }, { type: "bytes32" }, { type: "bytes32" }],
+    [chunk.marketId, sequence, priorRoot, published.bundle_hash],
+  ));
+  const chainBatchId = published.chain_batch_id ?? derivedChainBatchId;
+  if (chainBatchId.toLowerCase() !== derivedChainBatchId.toLowerCase()) throw new Error("persisted_chain_batch_identity_mismatch");
+  if (published.chain_batch_id === null) {
+    const persisted = await db.query(
+      `UPDATE arc_batches SET chain_batch_id = $2, chain_sequence = $3, chain_prior_root = $4,
+              chain_data_commitment = $5, updated_at = clock_timestamp()
+        WHERE batch_id = $1 AND chain_batch_id IS NULL`,
+      [payload.batchId, chainBatchId, sequence.toString(), priorRoot, published.bundle_hash],
+    );
+    if ((persisted.rowCount ?? 0) !== 1) throw new Error("chain_batch_identity_persistence_race");
+  }
+  const matches = chunk.fills.map((fill) => ({
+    buyOrderHash: fill.buyOrderHash,
+    sellOrderHash: fill.sellOrderHash,
+    quantity: fill.quantity,
+  }));
+  const leaves = matches.map((matched, index) => keccak256(encodeAbiParameters(
+    [{ type: "bytes32" }, { type: "uint32" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint128" }],
+    [chainBatchId, index, matched.buyOrderHash, matched.sellOrderHash, matched.quantity],
+  )));
+  const tree = merkleTree(leaves);
+  const feeBps = BigInt(await publicClient.readContract({
+    address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "feeBps",
+  }));
+  let expectedDebits = 0n;
+  let expectedCredits = 0n;
+  let expectedFees = 0n;
+  let expectedClaimAtoms = 0n;
+  let expectedLedgerRoot = priorRoot;
+  for (let index = 0; index < chunk.fills.length; index += 1) {
+    const fill = chunk.fills[index]!;
+    const buy = await publicClient.readContract({
+      address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "getOrder", args: [fill.buyOrderHash],
+    });
+    const reserveBefore = (fill.buyFilledBefore * buy.order.pricePpm + 999_999n) / 1_000_000n;
+    const reserveAfter = ((fill.buyFilledBefore + fill.quantity) * buy.order.pricePpm + 999_999n) / 1_000_000n;
+    const debit = reserveAfter - reserveBefore;
+    const quote = fill.quantity * chunk.clearingPricePpm / 1_000_000n;
+    const fee = quote * feeBps / 10_000n;
+    if (quote === 0n || debit < quote || quote < fee) throw new Error("invalid_batch_conservation_inputs");
+    const credit = debit - fee;
+    expectedDebits += debit;
+    expectedCredits += credit;
+    expectedFees += fee;
+    expectedClaimAtoms += fill.quantity;
+    expectedLedgerRoot = keccak256(encodeAbiParameters(
+      [{ type: "bytes32" }, { type: "bytes32" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint128" }],
+      [expectedLedgerRoot, leaves[index]!, debit, credit, fee, fill.quantity],
+    ));
+  }
+  await db.query(
+    `UPDATE arc_batches SET chain_match_root = $2, chain_expected_ledger_root = $3,
+            updated_at = clock_timestamp()
+      WHERE batch_id = $1 AND chain_batch_id = $4`,
+    [payload.batchId, tree.root, expectedLedgerRoot, chainBatchId],
+  );
+
+  await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "RUNNING");
+  let lastHash: Hex | null = null;
+  try {
+    await ensureLegacyBatchCommitment(publicClient, walletClient, config.exchangeAddress, account, published.bundle_hash);
+    const commitmentBlock = await publicClient.readContract({
+      address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "publishedDataCommitments", args: [published.bundle_hash],
+    });
+    let status = await latestBatchStatus(publicClient, config.exchangeAddress, chainBatchId, commitmentBlock);
+    if (status === 0) {
+      const active = await publicClient.readContract({
+        address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "activeBatchByMarket", args: [chunk.marketId],
+      });
+      if (active !== `0x${"00".repeat(32)}` && active.toLowerCase() !== chainBatchId.toLowerCase()) {
+        throw new Error("conflicting_active_chain_batch");
       }
       const simulation = await publicClient.simulateContract({
-        account,
-        address: config.exchangeAddress,
-        abi: arenaExchangeAbi,
-        functionName: "executeBatch",
+        account, address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "openBatch",
+        args: [chunk.marketId, sequence, priorRoot, published.bundle_hash],
+      });
+      lastHash = await sendChecked(publicClient, walletClient, simulation.request);
+      status = 1;
+    }
+    if (status === 1) {
+      const simulation = await publicClient.simulateContract({
+        account, address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "sealBatch",
+        args: [chainBatchId, published.order_root],
+      });
+      lastHash = await sendChecked(publicClient, walletClient, simulation.request);
+      status = 2;
+    }
+    if (status === 2) {
+      const simulation = await publicClient.simulateContract({
+        account, address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "clearBatch",
         args: [
-          chunk.marketId,
-          chunk.outcome,
-          chunk.clearingPricePpm,
-          chunk.fills.map((fill) => ({
-            buyOrderHash: fill.buyOrderHash,
-            sellOrderHash: fill.sellOrderHash,
-            quantity: fill.quantity,
-          })),
+          chainBatchId, chunk.outcome, chunk.clearingPricePpm, tree.root, matches.length,
+          expectedDebits, expectedCredits, expectedFees, expectedClaimAtoms, expectedLedgerRoot,
         ],
       });
-      const hash = await walletClient.writeContract(simulation.request);
-      const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1, timeout: 30_000 });
-      if (receipt.status !== "success") throw new Error(`transaction_reverted:${hash}`);
-      lastHash = hash;
-      await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "SUCCEEDED", hash);
-      logger.info({
-        batchId: chunk.batchId,
-        chunkIndex: chunk.chunkIndex,
-        txHash: hash,
-        explorerUrl: transactionUrl(hash),
-      }, "arc_batch_chunk_confirmed");
-    } catch (error) {
-      await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "FAILED", undefined, errorMessage(error));
-      throw error;
+      lastHash = await sendChecked(publicClient, walletClient, simulation.request);
+      status = 3;
     }
+    if (status === 3) {
+      const simulation = await publicClient.simulateContract({
+        account, address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "commitBatch", args: [chainBatchId],
+      });
+      lastHash = await sendChecked(publicClient, walletClient, simulation.request);
+      status = 4;
+    }
+    if (status !== 4 && status !== 5 && status !== 6) throw new Error(`unexpected_chain_batch_status:${status}`);
+    for (let index = 0; index < matches.length; index += 1) {
+      const applied = await publicClient.readContract({
+        address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "appliedBatchLeaves", args: [chainBatchId, index],
+      });
+      if (applied !== `0x${"00".repeat(32)}`) {
+        if (applied.toLowerCase() !== leaves[index]!.toLowerCase()) throw new Error("conflicting_applied_batch_leaf");
+        continue;
+      }
+      const simulation = await publicClient.simulateContract({
+        account, address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "applyBatchMatch",
+        args: [chainBatchId, index, matches[index]!, tree.proofs[index]!],
+      });
+      lastHash = await sendChecked(publicClient, walletClient, simulation.request);
+    }
+    const finalizedSequence = await publicClient.readContract({
+      address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "nextBatchSequence", args: [chunk.marketId],
+    });
+    if (finalizedSequence === sequence) {
+      const simulation = await publicClient.simulateContract({
+        account, address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "finalizeBatch", args: [chainBatchId],
+      });
+      lastHash = await sendChecked(publicClient, walletClient, simulation.request);
+    } else if (finalizedSequence !== sequence + 1n) {
+      throw new Error("chain_batch_sequence_advanced_unexpectedly");
+    }
+    const finalizedRoot = await publicClient.readContract({
+      address: config.exchangeAddress, abi: arenaExchangeAbi, functionName: "lastFinalizedLedgerRoot", args: [chunk.marketId],
+    });
+    if (finalizedRoot.toLowerCase() !== expectedLedgerRoot.toLowerCase()) throw new Error("finalized_ledger_root_mismatch");
+    await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "SUCCEEDED", lastHash ?? undefined);
+    logger.info({ batchId: chunk.batchId, chainBatchId, txHash: lastHash }, "arc_restartable_batch_finalized");
+  } catch (error) {
+    await markBatchChunk(db, chunk.batchId, chunk.chunkIndex, "FAILED", undefined, errorMessage(error));
+    throw error;
   }
 
   const active = await finalizeExecutedBatch(db, payload.batchId as Hex, job.id);
@@ -479,10 +731,10 @@ async function sendContractTransaction(
   if (job.kind === "EXECUTE_BATCH") return executePersistedBatch(job, config, db, logger);
   const publicClient = createArcPublicClient(config);
   const signerKey = job.kind === "CREATE_MARKET"
-    ? config.marketAdminPrivateKey
+    ? config.upgradeMultisigPrivateKey
     : job.kind === "EXECUTE_MATCH"
-      ? config.matcherPrivateKey
-    : job.kind === "RESOLVE_MARKET" || job.kind === "INVALIDATE_MARKET"
+      ? config.sequencerPrivateKey
+    : job.kind === "RESOLVE_MARKET" || job.kind === "INVALIDATE_AFTER_GRACE"
       ? config.resolverPrivateKey
       : config.relayerPrivateKey;
   const walletClient = createArcWalletClient(config, signerKey);
@@ -593,6 +845,18 @@ async function sendContractTransaction(
         throw new Error("match_prestate_changed");
       }
       if (Number(buy.status) !== 1 || Number(sell.status) !== 1) throw new Error("match_order_not_active");
+      const matches = [{
+        buyOrderHash: payload.buyOrderHash as Hex,
+        sellOrderHash: payload.sellOrderHash as Hex,
+        quantity: BigInt(payload.quantity),
+      }];
+      const commitment = legacyBatchCommitment(
+        payload.marketId as Hex,
+        payload.outcome,
+        BigInt(payload.clearingPricePpm),
+        matches,
+      );
+      await ensureLegacyBatchCommitment(publicClient, walletClient, config.exchangeAddress, account, commitment);
       const simulation = await publicClient.simulateContract({
         account,
         address: config.exchangeAddress,
@@ -602,11 +866,7 @@ async function sendContractTransaction(
           payload.marketId as Hex,
           payload.outcome,
           BigInt(payload.clearingPricePpm),
-          [{
-            buyOrderHash: payload.buyOrderHash as Hex,
-            sellOrderHash: payload.sellOrderHash as Hex,
-            quantity: BigInt(payload.quantity),
-          }],
+          matches,
         ],
       });
       hash = await walletClient.writeContract(simulation.request);
@@ -620,15 +880,16 @@ async function sendContractTransaction(
         functionName: "markets",
         args: [payload.marketId as Hex],
       });
-      if (Number(market[3]) !== 0) {
+      if (Number(market[5]) !== 0) {
         if (
-          market[0].toLowerCase() !== payload.externalIdHash.toLowerCase()
-          || Number(market[1]) !== payload.outcomeCount
-          || market[2] !== BigInt(payload.closeTime)
+          market[0].toLowerCase() !== payload.specHash.toLowerCase()
+          || market[1].toLowerCase() !== payload.externalIdHash.toLowerCase()
+          || Number(market[4]) !== payload.outcomeCount
+          || market[3] !== BigInt(payload.closeTime)
         ) throw new Error("market_id_conflicts_with_onchain_state");
         await db.query(
           "UPDATE arc_markets SET status = $2, updated_at = now() WHERE market_id = $1",
-          [payload.marketId, Number(market[3]) === 1 ? "OPEN" : Number(market[3]) === 2 ? "RESOLVED" : "INVALID"],
+          [payload.marketId, Number(market[5]) === 1 ? "OPEN" : Number(market[5]) === 2 ? "RESOLVED" : "INVALID"],
         );
         logger.warn({ jobId: job.id, marketId: payload.marketId }, "arc_job_recovered_from_chain_state");
         return null;
@@ -640,9 +901,20 @@ async function sendContractTransaction(
         functionName: "createMarket",
         args: [
           payload.marketId as Hex,
+          payload.specHash as Hex,
           payload.externalIdHash as Hex,
           payload.outcomeCount,
           BigInt(payload.closeTime),
+          {
+            primarySourceId: payload.resolutionRule.primarySourceId as Hex,
+            witnessSourceId: payload.resolutionRule.witnessSourceId as Hex,
+            sourceEventId: payload.resolutionRule.sourceEventId as Hex,
+            primarySigner: getAddress(payload.resolutionRule.primarySigner),
+            witnessSigner: getAddress(payload.resolutionRule.witnessSigner),
+            maxReportAgeSeconds: BigInt(payload.resolutionRule.maxReportAgeSeconds),
+            maxSourceTimestampSkewSeconds: BigInt(payload.resolutionRule.maxSourceTimestampSkewSeconds),
+            graceSeconds: BigInt(payload.resolutionRule.graceSeconds),
+          },
         ],
       });
       hash = await walletClient.writeContract(simulation.request);
@@ -656,27 +928,35 @@ async function sendContractTransaction(
         functionName: "markets",
         args: [payload.marketId as Hex],
       });
-      if (Number(market[3]) === 2) {
-        if (Number(market[4]) !== payload.winningOutcome) throw new Error("market_resolved_with_different_outcome");
+      if (Number(market[5]) === 2 || Number(market[5]) === 3) {
         await db.query(
-          "UPDATE arc_markets SET status = 'RESOLVED', winning_outcome = $2, updated_at = now() WHERE market_id = $1",
-          [payload.marketId, payload.winningOutcome],
+          "UPDATE arc_markets SET status = $2, winning_outcome = $3, updated_at = now() WHERE market_id = $1",
+          [payload.marketId, Number(market[5]) === 2 ? "RESOLVED" : "INVALID", Number(market[5]) === 2 ? Number(market[6]) : null],
         );
         logger.warn({ jobId: job.id, marketId: payload.marketId }, "arc_job_recovered_from_chain_state");
         return null;
       }
-      if (Number(market[3]) === 3) throw new Error("market_already_invalidated");
+      const report = (value: z.infer<typeof ResolutionReportPayload>) => ({
+        sourceId: value.sourceId as Hex,
+        sourceEventId: value.sourceEventId as Hex,
+        observedAt: BigInt(value.observedAt),
+        publishedAt: BigInt(value.publishedAt),
+        finalResult: value.finalResult,
+        normalizedOutcome: value.normalizedOutcome,
+        rawPayloadHash: value.rawPayloadHash as Hex,
+        signatureEvidence: value.signatureEvidence as Hex,
+      });
       const simulation = await publicClient.simulateContract({
         account,
         address: config.exchangeAddress,
         abi: arenaExchangeAbi,
         functionName: "resolveMarket",
-        args: [payload.marketId as Hex, payload.winningOutcome],
+        args: [payload.marketId as Hex, report(payload.primary), report(payload.witness)],
       });
       hash = await walletClient.writeContract(simulation.request);
       break;
     }
-    case "INVALIDATE_MARKET": {
+    case "INVALIDATE_AFTER_GRACE": {
       const payload = InvalidateMarketPayload.parse(job.payload);
       const market = await publicClient.readContract({
         address: config.exchangeAddress,
@@ -684,7 +964,7 @@ async function sendContractTransaction(
         functionName: "markets",
         args: [payload.marketId as Hex],
       });
-      if (Number(market[3]) === 3) {
+      if (Number(market[5]) === 3) {
         await db.query(
           "UPDATE arc_markets SET status = 'INVALID', updated_at = now() WHERE market_id = $1",
           [payload.marketId],
@@ -692,12 +972,12 @@ async function sendContractTransaction(
         logger.warn({ jobId: job.id, marketId: payload.marketId }, "arc_job_recovered_from_chain_state");
         return null;
       }
-      if (Number(market[3]) === 2) throw new Error("market_already_resolved");
+      if (Number(market[5]) === 2) throw new Error("market_already_resolved");
       const simulation = await publicClient.simulateContract({
         account,
         address: config.exchangeAddress,
         abi: arenaExchangeAbi,
-        functionName: "invalidateMarket",
+        functionName: "invalidateAfterGrace",
         args: [payload.marketId as Hex],
       });
       hash = await walletClient.writeContract(simulation.request);
@@ -726,12 +1006,73 @@ async function sendContractTransaction(
     );
   } else if (job.kind === "RESOLVE_MARKET") {
     const payload = ResolveMarketPayload.parse(job.payload);
+    const market = await publicClient.readContract({
+      address: config.exchangeAddress,
+      abi: arenaExchangeAbi,
+      functionName: "markets",
+      args: [payload.marketId as Hex],
+    });
+    const status = Number(market[5]);
+    if (status !== 2 && status !== 3) throw new Error("resolution_not_terminal_after_confirmation");
     await db.query(
-      `UPDATE arc_markets SET status = 'RESOLVED', winning_outcome = $2,
-       resolution_tx_hash = $3, updated_at = now() WHERE market_id = $1`,
-      [payload.marketId, payload.winningOutcome, hash],
+      `UPDATE arc_markets SET status = $2, winning_outcome = $3,
+       primary_report = $4::jsonb, witness_report = $5::jsonb,
+       resolution_tx_hash = $6, updated_at = now() WHERE market_id = $1`,
+      [
+        payload.marketId,
+        status === 2 ? "RESOLVED" : "INVALID",
+        status === 2 ? Number(market[6]) : null,
+        JSON.stringify(payload.primary),
+        JSON.stringify(payload.witness),
+        hash,
+      ],
     );
-  } else {
+    const storedReports = receipt.logs.flatMap((log) => {
+      try {
+        const decoded = decodeEventLog({ abi: arenaExchangeAbi, data: log.data, topics: log.topics });
+        return decoded.eventName === "ResolutionReportStored"
+          ? [decoded.args as Record<string, unknown>]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+    if (storedReports.length !== 2) throw new Error("resolution_report_events_missing");
+    for (const [sourceIndex, report] of [payload.primary, payload.witness].entries()) {
+      const event = storedReports.find((entry) => String(entry.sourceId).toLowerCase() === report.sourceId.toLowerCase());
+      if (!event) throw new Error("resolution_report_event_source_mismatch");
+      await db.query(
+        `INSERT INTO arc_resolution_reports(
+           report_digest, market_id, source_index, source_id, source_event_id, observed_at,
+           published_at, final_result, normalized_outcome, raw_payload_hash, signature_evidence,
+           transaction_hash
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (report_digest) DO NOTHING`,
+        [
+          event.reportDigest,
+          payload.marketId,
+          sourceIndex,
+          report.sourceId,
+          report.sourceEventId,
+          report.observedAt,
+          report.publishedAt,
+          report.finalResult,
+          report.normalizedOutcome,
+          report.rawPayloadHash,
+          report.signatureEvidence,
+          hash,
+        ],
+      );
+    }
+    await db.query(
+      `UPDATE arc_markets SET primary_report_digest = $2, witness_report_digest = $3 WHERE market_id = $1`,
+      [
+        payload.marketId,
+        storedReports.find((entry) => String(entry.sourceId).toLowerCase() === payload.primary.sourceId.toLowerCase())?.reportDigest,
+        storedReports.find((entry) => String(entry.sourceId).toLowerCase() === payload.witness.sourceId.toLowerCase())?.reportDigest,
+      ],
+    );
+  } else if (job.kind === "INVALIDATE_AFTER_GRACE") {
     const payload = InvalidateMarketPayload.parse(job.payload);
     await db.query(
       `UPDATE arc_markets SET status = 'INVALID', resolution_tx_hash = $2,
@@ -780,9 +1121,7 @@ async function processJobs(
       logger.error({ err: error, jobId: job?.id, kind: job?.kind }, "arc_job_failed");
       if (job) {
         const message = errorMessage(error);
-        const permanentBatchFailure = job.kind === "EXECUTE_BATCH"
-          && message === "batch_chunk_prestate_changed";
-        const dead = await failJob(db, job, message, { permanent: permanentBatchFailure }).catch((failure) => {
+        const dead = await failJob(db, job, message).catch((failure) => {
           logger.fatal({ err: failure, jobId: job?.id }, "arc_job_failure_state_write_failed");
           return false;
         });
@@ -802,9 +1141,28 @@ async function processJobs(
         } else if (dead && job.kind === "EXECUTE_BATCH") {
           const payload = ExecuteBatchPayload.safeParse(job.payload);
           if (payload.success) {
-            await reconcileFailedBatch(db, config, job, payload.data, message).catch((failure) =>
-              logger.error({ err: failure, jobId: job?.id }, "arc_batch_failure_reconciliation_failed"),
+            const persisted = await db.query<{ chain_batch_id: string | null }>(
+              "SELECT chain_batch_id FROM arc_batches WHERE batch_id = $1",
+              [payload.data.batchId],
             );
+            if (persisted.rows[0]?.chain_batch_id) {
+              await requeueRestartableJob(db, job.id, `restartable_chain_batch:${message}`).catch((failure) =>
+                logger.fatal({ err: failure, jobId: job?.id }, "arc_batch_restart_requeue_failed"),
+              );
+            } else {
+              await reconcileFailedBatch(db, config, job, payload.data, message).catch((failure) =>
+                logger.error({ err: failure, jobId: job?.id }, "arc_batch_failure_reconciliation_failed"),
+              );
+            }
+          }
+        } else if (dead && job.kind === "RESOLVE_MARKET") {
+          const payload = ResolveMarketPayload.safeParse(job.payload);
+          if (payload.success) {
+            await db.query(
+              `UPDATE arc_markets SET resolution_job_id = NULL, updated_at = now()
+                WHERE market_id = $1 AND resolution_job_id = $2 AND status = 'OPEN'`,
+              [payload.data.marketId, job.id],
+            ).catch((failure) => logger.error({ err: failure, jobId: job?.id }, "arc_resolution_job_release_failed"));
           }
         }
         metrics.jobsProcessed.inc({ kind: job.kind, result: "failure" });
@@ -824,14 +1182,21 @@ async function applyIndexedEvent(
   let marketEvent: { marketId: string; eventType: string; payload: Record<string, unknown> } | null = null;
   if (eventName === "MarketCreated") {
     await db.query(
-      `UPDATE arc_markets SET status = 'OPEN', create_tx_hash = COALESCE(create_tx_hash, $2), updated_at = now()
+      `UPDATE arc_markets SET status = 'OPEN', spec_hash = $2, resolution_rule_hash = $3,
+       create_tx_hash = COALESCE(create_tx_hash, $4), updated_at = now()
        WHERE market_id = $1`,
-      [args.marketId, txHash],
+      [args.marketId, args.specHash, args.resolutionRuleHash, txHash],
     );
     marketEvent = {
       marketId: String(args.marketId),
       eventType: "MARKET_OPENED",
-      payload: { marketId: String(args.marketId), status: "OPEN", transactionHash: txHash },
+      payload: {
+        marketId: String(args.marketId),
+        specHash: String(args.specHash),
+        resolutionRuleHash: String(args.resolutionRuleHash),
+        status: "OPEN",
+        transactionHash: txHash,
+      },
     };
   } else if (eventName === "MarketResolved") {
     await db.query(
@@ -1008,8 +1373,8 @@ export async function startMiddleman(config: ArcConfig, logger: Logger): Promise
       rpc: state.lastRpcOkAt ? Date.now() - Date.parse(state.lastRpcOkAt) < 30_000 : false,
       contract: true,
       relayer: Boolean(config.relayerPrivateKey),
-      marketAdmin: Boolean(config.marketAdminPrivateKey),
-      matcher: Boolean(config.matcherPrivateKey),
+      upgradeMultisig: Boolean(config.upgradeMultisigPrivateKey),
+      sequencer: Boolean(config.sequencerPrivateKey),
       resolver: Boolean(config.resolverPrivateKey),
       resultWatcher: await resultWatcherReady(db, config.resultPollIntervalMs),
     };
@@ -1035,8 +1400,8 @@ export async function startMiddleman(config: ArcConfig, logger: Logger): Promise
   logger.info({
     port: config.port,
     relayer: createArcWalletClient(config, config.relayerPrivateKey).account?.address,
-    marketAdmin: createArcWalletClient(config, config.marketAdminPrivateKey).account?.address,
-    matcher: createArcWalletClient(config, config.matcherPrivateKey).account?.address,
+    upgradeMultisig: createArcWalletClient(config, config.upgradeMultisigPrivateKey).account?.address,
+    sequencer: createArcWalletClient(config, config.sequencerPrivateKey).account?.address,
     resolver: createArcWalletClient(config, config.resolverPrivateKey).account?.address,
   }, "arc_middleman_started");
   void processJobs(config, db, logger, state, metrics);

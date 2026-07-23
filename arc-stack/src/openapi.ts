@@ -175,9 +175,10 @@ export function buildExchangeOpenApi(errorCodes: ErrorCode[]) {
           properties: { cancellation: ref("ArcCancellation"), signature: ref("Hex") }, additionalProperties: false,
         },
         CreateMarketRequest: {
-          type: "object", required: ["fixtureId", "outcomeCount", "closeTime"],
+          type: "object", required: ["fixtureId", "specHash", "outcomeCount", "closeTime", "resolutionRule"],
           properties: {
             fixtureId: { type: "string", minLength: 1, maxLength: 256 },
+            specHash: ref("Hex32"),
             outcomeCount: { const: 3 },
             closeTime: { type: "string", format: "date-time" },
             category: { const: "SPORTS", default: "SPORTS" },
@@ -185,11 +186,31 @@ export function buildExchangeOpenApi(errorCodes: ErrorCode[]) {
             displayTitle: { type: "string", minLength: 1, maxLength: 180 },
             outcomeLabels: { type: "array", minItems: 3, maxItems: 3, items: { type: "string", minLength: 1, maxLength: 80 } },
             resolutionRules: { type: "string", minLength: 1, maxLength: 500 },
+            resolutionRule: {
+              type: "object",
+              required: ["primarySourceId", "witnessSourceId", "sourceEventId", "primarySigner", "witnessSigner", "maxReportAgeSeconds", "maxSourceTimestampSkewSeconds", "graceSeconds"],
+              properties: {
+                primarySourceId: ref("Hex32"), witnessSourceId: ref("Hex32"), sourceEventId: ref("Hex32"),
+                primarySigner: ref("Address"), witnessSigner: ref("Address"), maxReportAgeSeconds: ref("UintString"),
+                maxSourceTimestampSkewSeconds: ref("UintString"), graceSeconds: ref("UintString"),
+              },
+              additionalProperties: false,
+            },
           }, additionalProperties: false,
         },
+        ResolutionReport: {
+          type: "object",
+          required: ["sourceId", "sourceEventId", "observedAt", "publishedAt", "finalResult", "normalizedOutcome", "rawPayloadHash", "signatureEvidence"],
+          properties: {
+            sourceId: ref("Hex32"), sourceEventId: ref("Hex32"), observedAt: ref("UintString"), publishedAt: ref("UintString"),
+            finalResult: { type: "boolean" }, normalizedOutcome: { type: "integer", minimum: 0, maximum: 2 },
+            rawPayloadHash: ref("Hex32"), signatureEvidence: ref("Hex"),
+          },
+          additionalProperties: false,
+        },
         ResolveMarketRequest: {
-          type: "object", required: ["winningOutcome"],
-          properties: { winningOutcome: { type: "integer", minimum: 0, maximum: 2 } }, additionalProperties: false,
+          type: "object", required: ["primary", "witness"],
+          properties: { primary: ref("ResolutionReport"), witness: ref("ResolutionReport") }, additionalProperties: false,
         },
         SuccessEnvelope: { type: "object", required: ["success", "data"], properties: { success: { const: true }, data: {} } },
         ErrorEnvelope: {

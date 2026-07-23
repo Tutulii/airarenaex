@@ -188,7 +188,7 @@ function validateAuthorityMatrix(authority, signoffRequired) {
   invariant(authority.scopeManifest === "config/arena-exchange/beta-scope.v1.json", "authority scope manifest changed");
   invariant(authority.network?.name === "arc-testnet" && authority.network?.chainId === 5_042_002, "authority network must be ARC Testnet 5042002");
   invariant(authority.exchangeContract === "ArenaExchange", "authority contract must be ArenaExchange");
-  invariant(authority.exchangeAddress === "0xEad589fA1b8BE258F47D3601B0c39238A364139b", "authority exchange address changed");
+  invariant(authority.exchangeAddress === "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071", "authority exchange address changed");
   invariant(authority.apiService === "airarena-arc-api" && authority.apiNamespace === "/v1", "authority API boundary changed");
   invariant(authority.mcpService === "airarena-arc-mcp" && authority.mcpToolPrefix === "airarena_arc_", "authority MCP boundary changed");
   invariant(authority.databaseNamespace === "arc_", "authority database namespace must be arc_");
@@ -360,7 +360,7 @@ function validateThreatModel(threat, roleMap, signoffRequired) {
       invariant(nonEmptyString(abuse[field]), `${abuse.threatId}.${field} is required`);
     }
     requireArray(abuse.verification, `${abuse.threatId}.verification`);
-    invariant(["release-blocker", "explicit-beta-trust-boundary"].includes(abuse.disposition), `${abuse.threatId}.disposition is invalid`);
+    invariant(["release-blocker", "explicit-beta-trust-boundary", "mitigated"].includes(abuse.disposition), `${abuse.threatId}.disposition is invalid`);
   }
   requireExactSet([...strideCoverage], ["S", "T", "R", "I", "D", "E"], "STRIDE coverage");
   invariant(threatMap.get("TM-03-SEQUENCER-ABUSE").disposition === "explicit-beta-trust-boundary", "plaintext sequencer trust boundary must be explicit");
@@ -390,7 +390,7 @@ function validateLaunchGate(launch, roleMap, signoffRequired) {
 
   const beta = launch.betaConstraints;
   invariant(beta?.network === "arc-testnet" && beta?.chainId === 5_042_002, "beta network must remain ARC Testnet 5042002");
-  invariant(beta?.exchangeAddress === "0xEad589fA1b8BE258F47D3601B0c39238A364139b", "beta exchange address changed");
+  invariant(beta?.exchangeAddress === "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071", "beta exchange address changed");
   invariant(beta?.collateralAddress === "0x3600000000000000000000000000000000000000" && beta?.collateralDecimals === 6, "beta collateral must remain ARC Testnet USDC");
   for (const field of ["allowlistRequired", "depositCapsRequired", "singleStableErc20"]) invariant(beta[field] === true, `${field} must remain true`);
   for (const field of ["realWorldValueRequired", "subjectiveMarketsAllowed", "leverageAllowed", "serverHeldAgentKeysAllowed", "publicMarketingAsMainnetProductionAllowed"]) invariant(beta[field] === false, `${field} must remain false`);
@@ -409,8 +409,9 @@ function validateLaunchGate(launch, roleMap, signoffRequired) {
   requireExactSet([...blockerMap.keys()], REQUIRED_HARD_BLOCKERS, "hard blocker IDs");
   for (const blocker of blockerMap.values()) {
     invariant(approvalMap.has(blocker.ownerDomain), `${blocker.blockerId} references unknown approval domain`);
-    invariant(blocker.state === "open", `${blocker.blockerId} cannot close before its immutable evidence exists`);
+    invariant(["open", "resolved"].includes(blocker.state), `${blocker.blockerId} cannot close before its immutable evidence exists`);
     invariant(nonEmptyString(blocker.description), `${blocker.blockerId}.description is required`);
+    if (blocker.state === "resolved") requireArray(blocker.codeEvidence, `${blocker.blockerId}.codeEvidence`, 2);
   }
   for (const blockerId of [
     "LG-10-RESOLVER-EVIDENCE-BINDING",
@@ -450,10 +451,11 @@ function validateCurrentArcCodeEvidence(artifacts) {
   invariant(nonEmptyString(middleman), "ARC middleman evidence is missing");
 
   for (const marker of [
-    "function resolveMarket(bytes32 marketId, uint8 winningOutcome) external onlyRole(RESOLVER_ROLE)",
-    "function pause() external onlyRole(PAUSER_ROLE)",
-    "function unpause() external onlyRole(PAUSER_ROLE)",
-    "function setFeeBps(uint16 newFeeBps) external onlyRole(DEFAULT_ADMIN_ROLE)",
+    "IArenaResolutionVerifier.ResolutionReport calldata primary",
+    "IArenaResolutionVerifier.ResolutionReport calldata witness",
+    "function pause() external onlyRole(EMERGENCY_PAUSER_ROLE)",
+    "function unpause() external onlyRole(UPGRADE_MULTISIG_ROLE)",
+    "function setFeeBps(uint16 newFeeBps) external onlyRole(UPGRADE_MULTISIG_ROLE)",
   ]) {
     invariant(contract.includes(marker), `current ARC contract evidence changed: ${marker}`);
   }
