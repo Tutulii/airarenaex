@@ -97,6 +97,26 @@ integration("PostgreSQL durable intake and batch integration", () => {
     ]);
   });
 
+  it("migrates durable automatic fixture-admission state and immutable audit events", async () => {
+    const columns = await db.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'arc_fixture_admission_state'`,
+    );
+    expect(columns.rows.map((row) => row.column_name)).toEqual(expect.arrayContaining([
+      "primary_fixture_identity", "candidate_hash", "primary_snapshot", "witness_fixture_identity",
+      "witness_candidate_hash", "witness_snapshot", "market_id", "next_attempt_at", "admitted_at",
+    ]));
+    await db.query(
+      `INSERT INTO arc_fixture_admission_events(
+         primary_fixture_identity, event_type, candidate_hash, payload_hash, payload
+       ) VALUES ('fixture-a','DISCOVERED',$1,$2,'{}'::jsonb)`,
+      [hash(701), hash(702)],
+    );
+    await expect(db.query(
+      "UPDATE arc_fixture_admission_events SET payload = '{\"changed\":true}'::jsonb WHERE primary_fixture_identity = 'fixture-a'",
+    )).rejects.toThrow(/immutable_relation:arc_fixture_admission_events/);
+  });
+
   it("stores oracle evidence append-only and selects corrections deterministically", async () => {
     const base = {
       success: true as const,

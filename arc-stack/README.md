@@ -7,7 +7,7 @@ Isolated ARC Testnet execution stack for AIR Arena Exchange. Its contracts, data
 | Service | Role |
 | --- | --- |
 | `airarena-arc-api` | Wallet authentication, TxLINE fixture access, market/order APIs, durable job creation |
-| `airarena-arc-middleman` | Arc transaction relay, automatic matching, trusted-result watcher, autonomous settlement, recovery-safe job worker, event indexer |
+| `airarena-arc-middleman` | Arc transaction relay, automatic fixture admission, matching, evidence-quorum settlement, recovery-safe job worker, event indexer |
 | `airarena-arc-mcp` | Arc-only MCP tools for agent discovery, transaction preparation, and signed-order relay |
 | Arc Postgres | Authentication challenges, hashed API tokens, orders, markets, jobs, events, and indexer state |
 
@@ -18,7 +18,8 @@ There is intentionally no frontend in this directory.
 - API: `https://airarena-arc-api-production.up.railway.app`
 - Middleman health: `https://airarena-arc-middleman-production.up.railway.app/health/ready`
 - MCP: `https://airarena-arc-mcp-production.up.railway.app/mcp`
-- Exchange V2: [`0x1457B0E54f697E9662E1678b74f545CFCe17e96a`](https://testnet.arcscan.app/address/0x1457B0E54f697E9662E1678b74f545CFCe17e96a)
+- Exchange V3: [`0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071`](https://testnet.arcscan.app/address/0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071)
+- Exchange V2 (exit only): [`0x1457B0E54f697E9662E1678b74f545CFCe17e96a`](https://testnet.arcscan.app/address/0x1457B0E54f697E9662E1678b74f545CFCe17e96a)
 - Exchange V1 (exit only): [`0xEad589fA1b8BE258F47D3601B0c39238A364139b`](https://testnet.arcscan.app/address/0xEad589fA1b8BE258F47D3601B0c39238A364139b)
 
 The deployment uses a dedicated database and role-separated wallets. No signer material is committed to this repository or returned by the public API/MCP surfaces.
@@ -109,9 +110,11 @@ The deployed settlement adapter currently admits only TxLINE regulation-time spo
 
 ## Autonomous market lifecycle
 
-1. An operator admits a TxLINE fixture as a regulation-time 1X2 market.
+1. The singleton fixture-admission worker discovers supported upcoming fixtures and admits a market only after an exact, unique, independently authenticated witness fixture is bound.
 2. Agents fund their own accounts and submit EIP-712 signed outcome-share orders.
 3. The middleman crosses compatible orders using deterministic price-time priority and submits the batch to Arc.
-4. After market close, the elected result watcher reads the trusted TxLINE outcome endpoint. A missing or non-final result remains pending.
-5. A valid final score is checked against the reported winner and settlement rule, recorded as immutable evidence, and queued idempotently.
-6. The resolver role confirms the market on Arc. Agents redeem winning shares without an operator choosing the outcome.
+4. After market close, the elected result watcher independently reads the primary and witness evidence sources. Missing, stale, divergent, or malformed evidence cannot select a winner.
+5. Agreeing final evidence is bound to the immutable market specification, recorded append-only, and queued idempotently. Grace expiry without quorum invalidates by the precommitted rule.
+6. The resolver submits the evidence envelopes to Arc. Agents redeem winning shares without an operator choosing the outcome.
+
+Automatic admission is disabled by default and must be enabled explicitly on the middleman with `ARC_FIXTURE_ADMISSION_ENABLED=true`. The interval, horizon, minimum lead time, scan limit, per-cycle cap, and retry delay are controlled by the `ARC_FIXTURE_ADMISSION_*` variables defined in `src/config.ts`. Admission decisions and failures are durable in `arc_fixture_admission_state`; every decision is independently auditable in the immutable `arc_fixture_admission_events` log.

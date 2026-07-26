@@ -19,6 +19,7 @@
     "dev:mcp": "SERVICE_ROLE=mcp tsx src/entrypoint.ts",
     "db:migrate": "tsx src/cli/migrate.ts",
     "batch:replay": "tsx src/cli/replay-batch.ts",
+    "fixture-admission:once": "tsx src/cli/run-fixture-admission.ts",
     "market-spec:vector": "tsx src/cli/print-market-spec-vector.ts"
   },
   "dependencies": {

@@ -57,6 +57,13 @@ const EnvironmentSchema = z.object({
   ARC_ORACLE_WITNESS_SIGNER_PRIVATE_KEY: OptionalPrivateKeySchema,
   ARC_ORACLE_RECOVERY_OBSERVATIONS: z.coerce.number().int().min(2).max(20).default(3),
   ARC_ORACLE_STALE_AFTER_SECONDS: z.coerce.number().int().min(15).max(3_600).default(180),
+  ARC_FIXTURE_ADMISSION_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  ARC_FIXTURE_ADMISSION_INTERVAL_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(900_000),
+  ARC_FIXTURE_ADMISSION_HORIZON_DAYS: z.coerce.number().int().min(1).max(365).default(180),
+  ARC_FIXTURE_ADMISSION_MIN_LEAD_SECONDS: z.coerce.number().int().min(300).max(604_800).default(3_600),
+  ARC_FIXTURE_ADMISSION_SCAN_LIMIT: z.coerce.number().int().min(1).max(500).default(100),
+  ARC_FIXTURE_ADMISSION_MAX_PER_RUN: z.coerce.number().int().min(1).max(100).default(10),
+  ARC_FIXTURE_ADMISSION_RETRY_SECONDS: z.coerce.number().int().min(300).max(604_800).default(21_600),
   ARC_LIQUIDITY_AGENT_PRIVATE_KEY: OptionalPrivateKeySchema,
   ARC_LIQUIDITY_AGENT_ADDRESS: OptionalAddressSchema,
   ARC_LIQUIDITY_VAULT_CAP_ATOMS: z.coerce.bigint().positive().default(100_000_000n),
@@ -116,6 +123,15 @@ export type ArcConfig = {
   oracleWitnessSignerPrivateKey?: `0x${string}`;
   oracleRecoveryObservations: number;
   oracleStaleAfterSeconds: number;
+  fixtureAdmission: {
+    enabled: boolean;
+    intervalMs: number;
+    horizonDays: number;
+    minLeadSeconds: number;
+    scanLimit: number;
+    maxPerRun: number;
+    retrySeconds: number;
+  };
   liquidityAgentPrivateKey?: `0x${string}`;
   liquidityAgentAddress?: Address;
   liquidityLimits: {
@@ -226,6 +242,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ArcConfig {
     sportmonksApiUrl: parsed.SPORTMONKS_API_URL.replace(/\/$/, ""),
     oracleRecoveryObservations: parsed.ARC_ORACLE_RECOVERY_OBSERVATIONS,
     oracleStaleAfterSeconds: parsed.ARC_ORACLE_STALE_AFTER_SECONDS,
+    fixtureAdmission: {
+      enabled: parsed.ARC_FIXTURE_ADMISSION_ENABLED,
+      intervalMs: parsed.ARC_FIXTURE_ADMISSION_INTERVAL_MS,
+      horizonDays: parsed.ARC_FIXTURE_ADMISSION_HORIZON_DAYS,
+      minLeadSeconds: parsed.ARC_FIXTURE_ADMISSION_MIN_LEAD_SECONDS,
+      scanLimit: parsed.ARC_FIXTURE_ADMISSION_SCAN_LIMIT,
+      maxPerRun: parsed.ARC_FIXTURE_ADMISSION_MAX_PER_RUN,
+      retrySeconds: parsed.ARC_FIXTURE_ADMISSION_RETRY_SECONDS,
+    },
     liquidityLimits: {
       vaultAtoms: parsed.ARC_LIQUIDITY_VAULT_CAP_ATOMS,
       inventoryAtoms: parsed.ARC_LIQUIDITY_INVENTORY_CAP_ATOMS,

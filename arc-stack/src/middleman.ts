@@ -43,6 +43,7 @@ import type { Logger } from "./logger.js";
 import { createMetrics } from "./metrics.js";
 import { resultWatcherReady, runResultWatcher, runTxlineSseWatcher } from "./settlement-watcher.js";
 import { runProtocolLiquidityAgent } from "./liquidity-agent.js";
+import { fixtureAdmissionReady, runFixtureAdmissionWorker } from "./fixture-admission.js";
 import { ORACLE_ADAPTERS } from "./oracle-adapter.js";
 import {
   assignActiveOrderToBatch,
@@ -143,6 +144,11 @@ type RuntimeState = {
   lastResultPollAt: string | null;
   lastResultSourceOkAt: string | null;
   lastResultError: string | null;
+  fixtureAdmissionLeader: boolean;
+  lastFixtureAdmissionAt: string | null;
+  lastFixtureAdmissionError: string | null;
+  fixtureAdmissionScanned: number;
+  fixtureAdmissionAdmitted: number;
   stopping: boolean;
 };
 
@@ -1428,6 +1434,11 @@ export async function startMiddleman(config: ArcConfig, logger: Logger): Promise
     lastResultPollAt: null,
     lastResultSourceOkAt: null,
     lastResultError: null,
+    fixtureAdmissionLeader: false,
+    lastFixtureAdmissionAt: null,
+    lastFixtureAdmissionError: null,
+    fixtureAdmissionScanned: 0,
+    fixtureAdmissionAdmitted: 0,
     stopping: false,
   };
   const publicClient = createArcPublicClient(config);
@@ -1452,6 +1463,7 @@ export async function startMiddleman(config: ArcConfig, logger: Logger): Promise
       sequencer: Boolean(config.sequencerPrivateKey),
       resolver: Boolean(config.resolverPrivateKey),
       resultWatcher: await resultWatcherReady(db, config.resultPollIntervalMs),
+      fixtureAdmission: await fixtureAdmissionReady(db, config),
     };
     const ready = Object.values(checks).every(Boolean);
     return reply.status(ready ? 200 : 503).send({ status: ready ? "ready" : "not_ready", checks, state });
@@ -1484,4 +1496,5 @@ export async function startMiddleman(config: ArcConfig, logger: Logger): Promise
   void runResultWatcher(config, db, logger, state, metrics);
   void runTxlineSseWatcher(config, db, logger, state);
   void runProtocolLiquidityAgent(config, db, logger, state);
+  void runFixtureAdmissionWorker(config, db, logger, state);
 }
