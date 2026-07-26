@@ -10,6 +10,7 @@ import {
   deriveSportmonksConfirmation,
   fetchSportmonksOracleReport,
   ORACLE_ADAPTERS,
+  type NormalizedOracleReport,
 } from "./oracle-adapter.js";
 import {
   evaluateOracleQuorum,
@@ -59,6 +60,14 @@ type CandidateMarket = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function resolutionEvidenceReady(
+  resolutionDue: boolean,
+  primary: NormalizedOracleReport | null,
+  witness: NormalizedOracleReport | null,
+): boolean {
+  return resolutionDue && primary?.finalResult === true && witness?.finalResult === true;
 }
 
 async function candidates(db: Database): Promise<CandidateMarket[]> {
@@ -170,6 +179,21 @@ async function observeAndSchedule(
       normalizedOutcome: null,
     });
     return jobId ? { kind: "INVALIDATION", jobId } : { kind: "PENDING" };
+  }
+  // Live source agreement is used for health and liquidity controls, but it is
+  // never sufficient to resolve a market. Resolution requires both the market
+  // close boundary and provider-final evidence, even if a provider publishes a
+  // provisional score with a normalized outcome.
+  if (!resolutionEvidenceReady(resolutionDue, primary, witness)) {
+    await recordResolutionDecision(db, {
+      marketId: market.market_id,
+      primaryReportHash: primary.reportHash,
+      witnessReportHash: witness.reportHash,
+      decision: "PENDING",
+      reason: !resolutionDue ? "market_not_closed" : "final_result_unavailable",
+      normalizedOutcome: null,
+    });
+    return { kind: "PENDING" };
   }
   const primaryAccount = privateKeyToAccount(config.oraclePrimarySignerPrivateKey);
   const witnessAccount = privateKeyToAccount(config.oracleWitnessSignerPrivateKey);

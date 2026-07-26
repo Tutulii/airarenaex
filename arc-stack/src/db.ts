@@ -255,6 +255,10 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
     version: 12,
     sql: readFileSync(new URL("../migrations/012_sportmonks_only_operation.sql", import.meta.url), "utf8"),
   },
+  {
+    version: 13,
+    sql: readFileSync(new URL("../migrations/013_retire_non_final_resolution_jobs.sql", import.meta.url), "utf8"),
+  },
 ];
 
 export async function migrateDatabase(db: Database, logger: Logger): Promise<void> {
