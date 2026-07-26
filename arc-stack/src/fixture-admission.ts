@@ -25,6 +25,7 @@ const TRADING_WINDOW_SECONDS = 365 * 24 * 60 * 60;
 const TRADING_CLOSE_OFFSET_SECONDS = 119 * 60;
 const RESOLUTION_EARLIEST_OFFSET_SECONDS = 120 * 60;
 const RESOLUTION_GRACE_SECONDS = 900;
+const LEADERSHIP_RETRY_MS = 5_000;
 
 const SportmonksParticipantSchema = z.object({
   id: z.union([z.string(), z.number()]),
@@ -691,7 +692,10 @@ export async function runFixtureAdmissionWorker(
         "SELECT pg_try_advisory_lock(hashtext('airarena_arc_fixture_admission')) AS acquired",
       );
       if (lock.rows[0]?.acquired) break;
-      await delay(config.fixtureAdmission.intervalMs);
+      // Railway performs rolling replacements, so the outgoing instance can
+      // briefly retain this session lock. Leadership retry must stay short and
+      // independent from the much longer provider polling interval.
+      await delay(LEADERSHIP_RETRY_MS);
     }
     if (state.stopping) return;
     state.fixtureAdmissionLeader = true;
