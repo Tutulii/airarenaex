@@ -79,17 +79,17 @@ export const CreateMarketSchema = z.object({
   outcomeCount: z.literal(3),
   closeTime: z.string().datetime({ offset: true }),
   category: z.literal("SPORTS").default("SPORTS"),
-  oracleSource: z.literal("TXLINE").default("TXLINE"),
+  oracleSource: z.literal("SPORTMONKS").default("SPORTMONKS"),
   displayTitle: z.string().trim().min(1).max(180).optional(),
   outcomeLabels: z.tuple([z.string().trim().min(1).max(80), z.string().trim().min(1).max(80), z.string().trim().min(1).max(80)])
     .default(["Home", "Draw", "Away"]),
   resolutionRules: z.string().trim().min(1).max(500).default("Regulation-time 1X2 result"),
   oracleBinding: z.object({
-    primaryAdapterId: z.literal("txline.sports-result.v1"),
+    primaryAdapterId: z.literal("sportmonks.football.v3"),
     primaryFixtureIdentity: z.string().trim().min(1).max(256),
-    witnessAdapterId: z.literal("sportmonks.football.v3"),
+    witnessAdapterId: z.literal("txline.sports-result.v1"),
     witnessFixtureIdentity: z.string().trim().min(1).max(256),
-    witnessAccessTier: z.enum(["FREE", "TRIAL"]),
+    witnessAccessTier: z.literal("FREE"),
     witnessAuthenticated: z.literal(true),
   }).strict(),
   resolutionRule: z.object({
@@ -171,6 +171,6 @@ export function jsonCancel(cancellation: ArcCancel): Record<string, string> {
 export function marketIdentifiers(fixtureId: string): { marketId: Hex; externalIdHash: Hex } {
   return {
     marketId: keccak256(stringToHex(`airarena:arc:market:${fixtureId}`)),
-    externalIdHash: keccak256(stringToHex(`txline:${fixtureId}`)),
+    externalIdHash: keccak256(stringToHex(`sportmonks:${fixtureId}`)),
   };
 }

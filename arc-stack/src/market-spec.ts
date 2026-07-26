@@ -129,7 +129,7 @@ export const ArcParameterSetSchema = z.object({
 
 export const ArcResolutionRuleSchema = z.object({
   version: VersionSchema,
-  adapter: z.literal("txline.sports-result.v1"),
+  adapter: z.enum(["sportmonks.football.v3", "txline.sports-result.v1"]),
   fixtureId: z.string().regex(FIXTURE_ID_PATTERN),
   sport: z.literal("football"),
   settlementBasis: z.enum(["REGULATION_TIME", "TO_ADVANCE"]),

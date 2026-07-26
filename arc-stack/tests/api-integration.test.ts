@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import pg from "pg";
 import WebSocket from "ws";
 import { getAddress } from "viem";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApi } from "../src/api.js";
 import { loadConfig } from "../src/config.js";
 import { appendExchangeEvent } from "../src/exchange-events.js";
@@ -154,6 +154,10 @@ integration("isolated /v1/exchange API", () => {
   });
 
   it("rejects market creation before enqueue when no authenticated free witness is configured", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      success: true,
+      data: [{ fixtureId: "another-txline-fixture" }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
     const response = await app.inject({
       method: "POST",
       url: "/v1/exchange/operator/markets",
@@ -162,16 +166,16 @@ integration("isolated /v1/exchange API", () => {
         "idempotency-key": "missing-witness-market-0001",
       },
       payload: {
-        fixtureId: "txline-fixture-without-witness",
+        fixtureId: "sportmonks-fixture-without-witness",
         specHash: `0x${"17".repeat(32)}`,
         outcomeCount: 3,
         closeTime: "2027-07-23T12:00:00.000Z",
         oracleBinding: {
-          primaryAdapterId: "txline.sports-result.v1",
-          primaryFixtureIdentity: "txline-fixture-without-witness",
-          witnessAdapterId: "sportmonks.football.v3",
-          witnessFixtureIdentity: "sportmonks-fixture",
-          witnessAccessTier: "TRIAL",
+          primaryAdapterId: "sportmonks.football.v3",
+          primaryFixtureIdentity: "sportmonks-fixture-without-witness",
+          witnessAdapterId: "txline.sports-result.v1",
+          witnessFixtureIdentity: "txline-fixture",
+          witnessAccessTier: "FREE",
           witnessAuthenticated: true,
         },
         resolutionRule: {
@@ -186,8 +190,9 @@ integration("isolated /v1/exchange API", () => {
         },
       },
     });
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({ error: { code: "oracle_witness_credential_unavailable" } });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ error: { code: "oracle_witness_fixture_not_found" } });
+    fetchMock.mockRestore();
     const jobs = await db.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM arc_jobs WHERE idempotency_key LIKE 'create-market:%'",
     );

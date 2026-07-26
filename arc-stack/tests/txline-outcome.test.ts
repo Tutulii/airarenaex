@@ -68,11 +68,11 @@ describe("trusted TxLINE outcomes", () => {
     const base = {
       fixtureId: "18257865",
       oracleBinding: {
-        primaryAdapterId: "txline.sports-result.v1",
+        primaryAdapterId: "sportmonks.football.v3",
         primaryFixtureIdentity: "18257865",
-        witnessAdapterId: "sportmonks.football.v3",
+        witnessAdapterId: "txline.sports-result.v1",
         witnessFixtureIdentity: "9901",
-        witnessAccessTier: "TRIAL",
+        witnessAccessTier: "FREE",
         witnessAuthenticated: true,
       },
       specHash: `0x${"11".repeat(32)}`,
@@ -93,7 +93,7 @@ describe("trusted TxLINE outcomes", () => {
     if (parsed.success) {
       expect(parsed.data).toMatchObject({
         category: "SPORTS",
-        oracleSource: "TXLINE",
+        oracleSource: "SPORTMONKS",
         outcomeLabels: ["Home", "Draw", "Away"],
         resolutionRules: "Regulation-time 1X2 result",
       });

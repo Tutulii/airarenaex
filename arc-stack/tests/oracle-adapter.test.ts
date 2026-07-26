@@ -10,6 +10,7 @@ import {
   reduceOracleReports,
   validateOracleReport,
   verifySportmonksFixture,
+  verifyTxlineFixture,
 } from "../src/oracle-adapter.js";
 
 function txline(sequence: number, correction = 0, score: [number, number] = [1, 0]) {
@@ -72,7 +73,7 @@ describe("OracleAdapterV1", () => {
     expect(forward).toMatchObject({ sequence: 2n, correctionRank: 1, homeScore: 2, normalizedOutcome: 0 });
   });
 
-  it("normalizes an authenticated Sportmonks witness independently", () => {
+  it("normalizes authenticated Sportmonks primary evidence independently", () => {
     const report = parseSportmonksOracleReport({
       data: {
         id: 9901,
@@ -93,7 +94,29 @@ describe("OracleAdapterV1", () => {
     });
   });
 
+  it("uses the regulation-time score when Sportmonks CURRENT includes extra time", () => {
+    const report = parseSportmonksOracleReport({
+      data: {
+        id: 9902,
+        state: { short_name: "AET" },
+        participants: [],
+        scores: [
+          { description: "CURRENT", score: { participant: "home", goals: 2 } },
+          { description: "CURRENT", score: { participant: "away", goals: 1 } },
+          { description: "2ND_HALF", score: { participant: "home", goals: 1 } },
+          { description: "2ND_HALF", score: { participant: "away", goals: 1 } },
+          { description: "EXTRA_TIME", score: { participant: "home", goals: 1 } },
+          { description: "EXTRA_TIME", score: { participant: "away", goals: 0 } },
+        ],
+      },
+      subscription: [{ type: "trial" }],
+    }, undefined, "2026-07-23T14:00:00.000Z");
+    expect(report).toMatchObject({ finalResult: true, homeScore: 1, awayScore: 1, normalizedOutcome: 1 });
+  });
+
   it("reserves future Pyth and election identifiers as explicitly disabled", () => {
+    expect(adapterRegistration(ORACLE_ADAPTERS.SPORTMONKS_V1)).toMatchObject({ enabled: true, role: "PRIMARY" });
+    expect(adapterRegistration(ORACLE_ADAPTERS.TXLINE_V1)).toMatchObject({ enabled: true, role: "WITNESS" });
     expect(adapterRegistration(ORACLE_ADAPTERS.PYTH_V1)).toMatchObject({ enabled: false, role: "RESERVED" });
     expect(adapterRegistration(ORACLE_ADAPTERS.ELECTION_V1)).toMatchObject({ enabled: false, role: "RESERVED" });
   });
@@ -129,6 +152,24 @@ describe("OracleAdapterV1", () => {
     const requested = new URL(String(fetchMock.mock.calls[0]![0]));
     expect(requested.pathname).toBe("/v3/football/fixtures/9901");
     expect(requested.searchParams.get("api_token")).toBe("trial-token-value");
+  });
+
+  it("qualifies the exact TxLINE witness fixture without trusting its outcome", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: [
+        { fixtureId: "18272873", homeTeam: "Azerbaijan", awayTeam: "Tajikistan" },
+        { fixtureId: "different-fixture", homeTeam: "A", awayTeam: "B" },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(verifyTxlineFixture("https://txline.test", "18272873"))
+      .resolves.toMatchObject({
+        rawPayloadHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+        accessTier: "FREE",
+      });
+    await expect(verifyTxlineFixture("https://txline.test", "missing"))
+      .rejects.toThrow("oracle_witness_fixture_not_found");
   });
 
   it("rejects paid witness credentials and access-tier misrepresentation", async () => {

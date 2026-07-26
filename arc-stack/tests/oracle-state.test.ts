@@ -12,7 +12,7 @@ import {
 const primaryKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as Hex;
 const exchange = "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071";
 
-function primary(at = "2026-07-23T12:00:00.000Z") {
+function txlineWitness(at = "2026-07-23T12:00:00.000Z") {
   return parseTxlineOracleReport({
     success: true,
     data: {
@@ -22,7 +22,7 @@ function primary(at = "2026-07-23T12:00:00.000Z") {
   }, undefined, at);
 }
 
-function witness(at = "2026-07-23T12:00:01.000Z", score: [number, number] = [1, 0]) {
+function sportmonksPrimary(at = "2026-07-23T12:00:01.000Z", score: [number, number] = [1, 0]) {
   return parseSportmonksOracleReport({
     data: {
       id: "witness-1", state: { short_name: "FT" }, participants: [],
@@ -36,27 +36,27 @@ function witness(at = "2026-07-23T12:00:01.000Z", score: [number, number] = [1, 
 }
 
 describe("independent witness and evidence binding", () => {
-  it("rejects market witness qualification without a free authenticated credential", () => {
+  it("rejects TxLINE witness qualification without a free authenticated endpoint", () => {
     const binding = {
-      adapterId: ORACLE_ADAPTERS.SPORTMONKS_V1,
+      adapterId: ORACLE_ADAPTERS.TXLINE_V1,
       fixtureIdentity: "9901",
-      accessTier: "TRIAL" as const,
+      accessTier: "FREE" as const,
       authenticated: true as const,
     };
     expect(() => assertQualifyingWitness(binding, {})).toThrow("oracle_witness_credential_unavailable");
-    expect(() => assertQualifyingWitness(binding, { sportmonksApiToken: "credential-present" })).not.toThrow();
+    expect(() => assertQualifyingWitness(binding, { txlineSourceUrl: "https://txline.test" })).not.toThrow();
   });
 
   it("requires fresh primary plus witness agreement", () => {
     const options = { nowMs: Date.parse("2026-07-23T12:00:02.000Z"), maxAgeSeconds: 30, maxSkewSeconds: 10 };
-    expect(evaluateOracleQuorum(primary(), witness(), options)).toMatchObject({ state: "HEALTHY", outcome: 0 });
-    expect(evaluateOracleQuorum(primary(), witness(undefined, [0, 1]), options)).toMatchObject({ state: "DIVERGENT", outcome: null });
-    expect(evaluateOracleQuorum(primary("2026-07-23T11:00:00.000Z"), witness(), options)).toMatchObject({ state: "STALE", outcome: null });
-    expect(evaluateOracleQuorum(primary(), null, options)).toMatchObject({ state: "UNAVAILABLE", outcome: null });
+    expect(evaluateOracleQuorum(sportmonksPrimary(), txlineWitness(), options)).toMatchObject({ state: "HEALTHY", outcome: 0 });
+    expect(evaluateOracleQuorum(sportmonksPrimary(undefined, [0, 1]), txlineWitness(), options)).toMatchObject({ state: "DIVERGENT", outcome: null });
+    expect(evaluateOracleQuorum(sportmonksPrimary("2026-07-23T11:00:00.000Z"), txlineWitness(), options)).toMatchObject({ state: "STALE", outcome: null });
+    expect(evaluateOracleQuorum(sportmonksPrimary(), null, options)).toMatchObject({ state: "UNAVAILABLE", outcome: null });
   });
 
   it("signs the exact Day 18 EIP-712 evidence envelope", async () => {
-    const report = primary();
+    const report = sportmonksPrimary();
     const signed = await signOracleReport({
       privateKey: primaryKey,
       chainId: 5_042_002,

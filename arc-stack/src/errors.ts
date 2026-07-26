@@ -33,6 +33,7 @@ export const ERROR_CATALOG = {
   oracle_witness_fixture_mismatch: { status: 422, message: "The witness returned a different fixture identity.", retryable: false },
   oracle_witness_paid_subscription_forbidden: { status: 422, message: "Paid witness credentials are disabled for the beta path.", retryable: false },
   oracle_witness_access_tier_mismatch: { status: 422, message: "The witness credential tier does not match the market binding.", retryable: false },
+  oracle_primary_paid_subscription_forbidden: { status: 422, message: "Paid primary-source credentials are disabled for the beta path.", retryable: false },
   oracle_witness_source_unavailable: { status: 503, message: "The independent witness source is temporarily unavailable.", retryable: true },
   oracle_primary_fixture_mismatch: { status: 422, message: "The primary oracle fixture binding does not match the market fixture.", retryable: false },
   exchange_halted_oracle_integrity: { status: 503, message: "Order intake is halted because oracle integrity is degraded.", retryable: true },

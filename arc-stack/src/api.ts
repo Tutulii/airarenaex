@@ -277,12 +277,25 @@ export async function buildApi(dependencies: ApiDependencies) {
 
   app.get<{ Querystring: { limit?: string } }>("/v1/fixtures", async (request) => {
     const limit = Math.min(100, Math.max(1, Number(request.query.limit ?? 50) || 50));
-    const response = await fetch(`${config.txlineSourceUrl}/v1/txline/fixtures?limit=${limit}`, {
-      signal: AbortSignal.timeout(10_000),
-      headers: { accept: "application/json", "user-agent": "airarena-arc-api/0.1" },
-    });
-    if (!response.ok) throw new Error(`txline_source_http_${response.status}`);
-    return { success: true, source: "txline", data: await response.json() };
+    const result = await db.query(
+      `SELECT market_id, fixture_id, status, display_title,
+              market_spec->>'scheduledStartAt' AS starts_at,
+              primary_adapter_id, witness_adapter_id, witness_fixture_identity
+         FROM arc_markets
+        WHERE primary_adapter_id = 'sportmonks.football.v3'
+          AND witness_adapter_id = 'txline.sports-result.v1'
+        ORDER BY COALESCE(market_spec->>'scheduledStartAt', close_time::text), market_id
+        LIMIT $1`,
+      [limit],
+    );
+    return {
+      success: true,
+      source: "sportmonks-primary",
+      witness: "txline",
+      // Preserve the existing fixture endpoint's nested provider-envelope
+      // shape so current MCP clients do not need a response migration.
+      data: { success: true, data: result.rows },
+    };
   });
 
   app.get<{ Querystring: { status?: string; category?: string; limit?: string } }>("/v1/markets", async (request) => {
@@ -1021,7 +1034,7 @@ export async function buildApi(dependencies: ApiDependencies) {
            spec_hash, resolution_rule, primary_adapter_id, primary_fixture_identity,
            witness_adapter_id, witness_fixture_identity, witness_access_tier, witness_qualified_at,
            witness_qualification_hash, witness_qualification_observed_at
-         ) VALUES ($1,$2,$3,$4,$5,'QUEUED','TXLINE_1X2_REGULATION',$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb,
+         ) VALUES ($1,$2,$3,$4,$5,'QUEUED','SPORTMONKS_PRIMARY_1X2_REGULATION',$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb,
            $14,$15,$16,$17,$18,clock_timestamp(),$19,$20)
          ON CONFLICT (market_id) DO NOTHING`,
         [

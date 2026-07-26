@@ -894,9 +894,14 @@ async function sendContractTransaction(
         [payload.marketId],
       );
       const binding = qualified.rows[0];
+      const supportedBinding = binding && (
+        (binding.primary_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1
+          && binding.witness_adapter_id === ORACLE_ADAPTERS.TXLINE_V1)
+        || (binding.primary_adapter_id === ORACLE_ADAPTERS.TXLINE_V1
+          && binding.witness_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1)
+      );
       if (!binding
-          || binding.primary_adapter_id !== ORACLE_ADAPTERS.TXLINE_V1
-          || binding.witness_adapter_id !== ORACLE_ADAPTERS.SPORTMONKS_V1
+          || !supportedBinding
           || !binding.witness_qualified_at
           || !binding.witness_qualification_hash) {
         throw new Error("oracle_witness_not_qualified");

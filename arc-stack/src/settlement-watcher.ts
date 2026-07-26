@@ -95,7 +95,8 @@ export async function runTxlineSseWatcher(
           for (const report of reports) {
             const markets = await db.query<{ market_id: Hex }>(
               `SELECT market_id FROM arc_markets
-                WHERE primary_adapter_id = $1 AND primary_fixture_identity = $2
+                WHERE ((primary_adapter_id = $1 AND primary_fixture_identity = $2)
+                    OR (witness_adapter_id = $1 AND witness_fixture_identity = $2))
                   AND status IN ('QUEUED','OPEN')
                 ORDER BY market_id`,
               [ORACLE_ADAPTERS.TXLINE_V1, report.fixtureIdentity],
@@ -162,7 +163,7 @@ async function candidates(db: Database): Promise<CandidateMarket[]> {
             witness_adapter_id, witness_fixture_identity
        FROM arc_markets
       WHERE status = 'OPEN'
-        AND settlement_policy = 'TXLINE_1X2_REGULATION'
+        AND settlement_policy IN ('TXLINE_1X2_REGULATION','SPORTMONKS_PRIMARY_1X2_REGULATION')
         AND outcome_count = 3
         AND resolution_job_id IS NULL
         AND witness_qualified_at IS NOT NULL
@@ -198,24 +199,44 @@ async function observeAndSchedule(
       || !config.oraclePrimarySignerPrivateKey || !config.oracleWitnessSignerPrivateKey) {
     throw new Error("oracle_runtime_not_configured");
   }
-  if (market.primary_adapter_id !== ORACLE_ADAPTERS.TXLINE_V1
-      || market.witness_adapter_id !== ORACLE_ADAPTERS.SPORTMONKS_V1) {
+  const sportmonksPrimary = market.primary_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1
+    && market.witness_adapter_id === ORACLE_ADAPTERS.TXLINE_V1;
+  const txlinePrimary = market.primary_adapter_id === ORACLE_ADAPTERS.TXLINE_V1
+    && market.witness_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1;
+  if (!sportmonksPrimary && !txlinePrimary) {
     throw new Error("oracle_market_adapter_binding_unsupported");
   }
-  const [primaryRest, witness] = await Promise.all([
-    fetchTxlineOracleReport(config.txlineSourceUrl, market.primary_fixture_identity),
+  const [sportmonksReport, txlineRest] = await Promise.all([
     fetchSportmonksOracleReport(
       config.sportmonksApiUrl,
       config.sportmonksApiToken,
-      market.witness_fixture_identity,
+      sportmonksPrimary ? market.primary_fixture_identity : market.witness_fixture_identity,
       10_000,
       false,
     ),
+    fetchTxlineOracleReport(
+      config.txlineSourceUrl,
+      sportmonksPrimary ? market.witness_fixture_identity : market.primary_fixture_identity,
+    ),
   ]);
-  const selectedPrimary = primaryRest
-    ? { report: primaryRest, conflicted: false }
-    : await readSelectedOracleReport(db, ORACLE_ADAPTERS.TXLINE_V1, market.primary_fixture_identity);
+  const selectedTxline = txlineRest
+    ? { report: txlineRest, conflicted: false }
+    : await readSelectedOracleReport(
+      db,
+      ORACLE_ADAPTERS.TXLINE_V1,
+      sportmonksPrimary ? market.witness_fixture_identity : market.primary_fixture_identity,
+    );
+  const selectedSportmonks = sportmonksReport
+    ? { report: sportmonksReport, conflicted: false }
+    : await readSelectedOracleReport(
+      db,
+      ORACLE_ADAPTERS.SPORTMONKS_V1,
+      sportmonksPrimary ? market.primary_fixture_identity : market.witness_fixture_identity,
+    );
+  const selectedPrimary = sportmonksPrimary ? selectedSportmonks : selectedTxline;
+  const selectedWitness = sportmonksPrimary ? selectedTxline : selectedSportmonks;
   const primary = selectedPrimary.report;
+  const witness = selectedWitness.report;
   const primaryStored = primary ? await storeOracleReport(db, primary, market.market_id) : null;
   const witnessStored = witness ? await storeOracleReport(db, witness, market.market_id) : null;
   const sourceWindow = {
@@ -227,7 +248,8 @@ async function observeAndSchedule(
   let quorum = resolutionDue
     ? evaluateOracleQuorum(primary, witness, sourceWindow)
     : evaluateOracleLiveHealth(primary, witness, sourceWindow);
-  if (selectedPrimary.conflicted || primaryStored?.conflicted || witnessStored?.conflicted) {
+  if (selectedPrimary.conflicted || selectedWitness.conflicted
+      || primaryStored?.conflicted || witnessStored?.conflicted) {
     quorum = {
       state: "MALFORMED",
       primary,

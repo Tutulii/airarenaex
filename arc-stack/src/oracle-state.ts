@@ -7,7 +7,7 @@ import {
   ORACLE_ADAPTERS,
   adapterRegistration,
   type OracleAdapterId,
-  verifySportmonksFixture,
+  verifyTxlineFixture,
   type NormalizedOracleReport,
 } from "./oracle-adapter.js";
 
@@ -22,36 +22,41 @@ export type OracleQuorum = {
 };
 
 export type WitnessBinding = {
-  adapterId: typeof ORACLE_ADAPTERS.SPORTMONKS_V1 | typeof ORACLE_ADAPTERS.OFFICIAL_COMPETITION_V1;
+  adapterId: typeof ORACLE_ADAPTERS.TXLINE_V1 | typeof ORACLE_ADAPTERS.OFFICIAL_COMPETITION_V1;
   fixtureIdentity: string;
   accessTier: "FREE" | "TRIAL";
   authenticated: true;
 };
 
-export function assertQualifyingWitness(binding: WitnessBinding, config: Pick<ArcConfig, "sportmonksApiToken">): void {
+export function assertQualifyingWitness(
+  binding: WitnessBinding,
+  config: Pick<ArcConfig, "txlineSourceUrl">,
+): void {
   const registration = adapterRegistration(binding.adapterId);
   if (!registration.enabled || registration.role !== "WITNESS" || registration.paid) {
     throw new Error("oracle_witness_not_qualified");
   }
   if (!binding.authenticated || !binding.fixtureIdentity.trim()) throw new Error("oracle_witness_not_qualified");
-  if (binding.adapterId === ORACLE_ADAPTERS.SPORTMONKS_V1 && !config.sportmonksApiToken) {
+  if (binding.adapterId === ORACLE_ADAPTERS.TXLINE_V1 && !config.txlineSourceUrl) {
     throw new Error("oracle_witness_credential_unavailable");
+  }
+  if (binding.adapterId === ORACLE_ADAPTERS.TXLINE_V1 && binding.accessTier !== "FREE") {
+    throw new Error("oracle_witness_not_qualified");
   }
 }
 
 export async function verifyQualifyingWitness(
   binding: WitnessBinding,
-  config: Pick<ArcConfig, "sportmonksApiToken" | "sportmonksApiUrl">,
+  config: Pick<ArcConfig, "txlineSourceUrl" | "txlineApiToken">,
 ): Promise<{ rawPayloadHash: Hex; observedAt: string }> {
   assertQualifyingWitness(binding, config);
-  if (binding.adapterId !== ORACLE_ADAPTERS.SPORTMONKS_V1 || !config.sportmonksApiToken) {
+  if (binding.adapterId !== ORACLE_ADAPTERS.TXLINE_V1) {
     throw new Error("oracle_witness_not_qualified");
   }
-  return verifySportmonksFixture(
-    config.sportmonksApiUrl,
-    config.sportmonksApiToken,
+  return verifyTxlineFixture(
+    config.txlineSourceUrl,
     binding.fixtureIdentity,
-    binding.accessTier,
+    config.txlineApiToken,
   );
 }
 

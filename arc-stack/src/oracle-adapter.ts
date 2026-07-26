@@ -20,8 +20,8 @@ export type OracleAdapterRegistration = {
 };
 
 export const ORACLE_ADAPTER_REGISTRY: readonly OracleAdapterRegistration[] = [
-  { id: ORACLE_ADAPTERS.TXLINE_V1, enabled: true, category: "SPORTS", role: "PRIMARY", paid: false },
-  { id: ORACLE_ADAPTERS.SPORTMONKS_V1, enabled: true, category: "SPORTS", role: "WITNESS", paid: false },
+  { id: ORACLE_ADAPTERS.SPORTMONKS_V1, enabled: true, category: "SPORTS", role: "PRIMARY", paid: false },
+  { id: ORACLE_ADAPTERS.TXLINE_V1, enabled: true, category: "SPORTS", role: "WITNESS", paid: false },
   { id: ORACLE_ADAPTERS.OFFICIAL_COMPETITION_V1, enabled: false, category: "SPORTS", role: "WITNESS", paid: false },
   { id: ORACLE_ADAPTERS.PYTH_V1, enabled: false, category: "CRYPTO", role: "RESERVED", paid: false },
   { id: ORACLE_ADAPTERS.ELECTION_V1, enabled: false, category: "POLITICS", role: "RESERVED", paid: false },
@@ -96,7 +96,23 @@ const SportmonksQualificationEnvelope = z.object({
   subscription: z.array(z.unknown()).min(1),
 }).passthrough();
 
-const FINAL_TOKENS = new Set(["ft", "final", "finished", "ended", "completed", "after_penalties"]);
+const TxlineFixtureQualificationEnvelope = z.object({
+  data: z.union([
+    z.array(z.object({
+      fixtureId: z.union([z.string().min(1), z.number().int().nonnegative()]).transform(String),
+    }).passthrough()),
+    z.object({
+      data: z.array(z.object({
+        fixtureId: z.union([z.string().min(1), z.number().int().nonnegative()]).transform(String),
+      }).passthrough()),
+    }).passthrough(),
+  ]),
+}).passthrough();
+
+const FINAL_TOKENS = new Set([
+  "ft", "final", "finished", "ended", "completed",
+  "aet", "after_extra_time", "ft_pen", "after_penalties",
+]);
 
 export function canonicalOracleJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -281,11 +297,19 @@ export function parseTxlineScoreSseReport(
 
 function sportmonksScore(data: z.infer<typeof SportmonksEnvelope>["data"], location: "home" | "away"): number {
   const direct = data.scores.filter((entry) => entry.score.participant === location && entry.score.goals !== undefined);
-  const preferred = direct.find((entry) => entry.description?.toUpperCase() === "CURRENT") ?? direct.at(-1);
+  const extended = data.scores.some((entry) => ["EXTRA_TIME", "EXTRA_TIME_ONLY", "PENALTIES"]
+    .includes(entry.description?.toUpperCase() ?? ""));
+  // Every AIR Arena sports.result.1x2.v1 market settles on regulation time.
+  // Sportmonks CURRENT includes extra time/penalties, so an extended match
+  // must use the cumulative 2ND_HALF score (the 90-minute result).
+  const desired = extended ? "2ND_HALF" : "CURRENT";
+  const preferred = direct.find((entry) => entry.description?.toUpperCase() === desired)
+    ?? (!extended ? direct.at(-1) : undefined);
   if (preferred?.score.goals !== undefined) return preferred.score.goals;
   const participant = data.participants.find((entry) => entry.meta?.location === location);
   const byId = data.scores.filter((entry) => participant && String(entry.participant_id) === String(participant.id));
-  const matched = byId.find((entry) => entry.description?.toUpperCase() === "CURRENT") ?? byId.at(-1);
+  const matched = byId.find((entry) => entry.description?.toUpperCase() === desired)
+    ?? (!extended ? byId.at(-1) : undefined);
   if (matched?.score.goals === undefined) throw new Error(`oracle_sportmonks_${location}_score_missing`);
   return matched.score.goals;
 }
@@ -293,7 +317,7 @@ function sportmonksScore(data: z.infer<typeof SportmonksEnvelope>["data"], locat
 export function parseSportmonksOracleReport(payload: unknown, rawResponse = canonicalOracleJson(payload), observedAt = new Date().toISOString()): NormalizedOracleReport {
   const parsed = SportmonksEnvelope.parse(payload);
   const accessTier = sportmonksAccessTier(parsed.subscription ?? []);
-  if (!accessTier) throw new Error("oracle_witness_paid_subscription_forbidden");
+  if (!accessTier) throw new Error("oracle_primary_paid_subscription_forbidden");
   const data = parsed.data;
   const homeScore = sportmonksScore(data, "home");
   const awayScore = sportmonksScore(data, "away");
@@ -403,9 +427,50 @@ export async function fetchSportmonksOracleReport(
   if (!response.ok) throw new Error(`oracle_sportmonks_http_${response.status}`);
   const raw = await response.text();
   if (raw.length > 1_000_000) throw new Error("oracle_sportmonks_payload_too_large");
-  const report = parseSportmonksOracleReport(JSON.parse(raw) as unknown, raw);
+  let report: NormalizedOracleReport;
+  try {
+    report = parseSportmonksOracleReport(JSON.parse(raw) as unknown, raw);
+  } catch (error) {
+    // Scheduled fixtures legitimately have no score rows. Treat that as no
+    // report yet rather than an adapter failure; malformed live/final payloads
+    // still fail closed.
+    if (!requireFinal && error instanceof Error
+        && /^oracle_sportmonks_(home|away)_score_missing$/.test(error.message)) return null;
+    throw error;
+  }
   validateOracleReport(report, { adapterId: ORACLE_ADAPTERS.SPORTMONKS_V1, fixtureIdentity: fixtureId, requireFinal });
   return report;
+}
+
+export async function verifyTxlineFixture(
+  baseUrl: string,
+  fixtureId: string,
+  apiToken?: string,
+  timeoutMs = 10_000,
+): Promise<{ rawPayloadHash: Hex; observedAt: string; accessTier: "FREE" }> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    "user-agent": "airarena-arc-witness-qualification/1",
+  };
+  if (apiToken) headers["x-api-token"] = apiToken;
+  const response = await fetch(`${baseUrl}/v1/txline/fixtures?limit=100`, {
+    headers,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) throw new Error(`oracle_witness_http_${response.status}`);
+  const raw = await response.text();
+  if (raw.length > 5_000_000) throw new Error("oracle_witness_payload_too_large");
+  const parsed = TxlineFixtureQualificationEnvelope.parse(JSON.parse(raw) as unknown);
+  const fixtures = Array.isArray(parsed.data) ? parsed.data : parsed.data.data;
+  const matches = fixtures.filter((fixture) => fixture.fixtureId === fixtureId);
+  if (matches.length === 0) throw new Error("oracle_witness_fixture_not_found");
+  const canonical = [...new Set(matches.map((fixture) => canonicalOracleJson(fixture)))];
+  if (canonical.length !== 1) throw new Error("oracle_witness_fixture_ambiguous");
+  return {
+    rawPayloadHash: keccak256(stringToHex(canonical[0]!)),
+    observedAt: new Date().toISOString(),
+    accessTier: "FREE",
+  };
 }
 
 export async function verifySportmonksFixture(
