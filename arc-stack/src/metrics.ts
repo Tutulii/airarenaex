@@ -22,13 +22,13 @@ export function createMetrics(service: string) {
   });
   const resultObservations = new Counter({
     name: "airarena_arc_result_observations_total",
-    help: "TxLINE result observations by validation result",
+    help: "Sportmonks result observations by validation result",
     labelNames: ["result"] as const,
     registers: [registry],
   });
   const autoSettlementsEnqueued = new Counter({
     name: "airarena_arc_auto_settlements_enqueued_total",
-    help: "Trusted TxLINE final outcomes enqueued for autonomous Arc resolution",
+    help: "Evidence-bound Sportmonks final outcomes enqueued for autonomous Arc resolution",
     registers: [registry],
   });
   return {

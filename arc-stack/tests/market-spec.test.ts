@@ -188,7 +188,7 @@ describe("AIR Arena ARC MarketSpec v1", () => {
     expectValidationCode(() => parseArcMarketSpecDraft(global), "INVALID_CAP_POLICY");
   });
 
-  it("requires an independent witness and unambiguous finality channels", () => {
+  it("requires distinct evidence source IDs and unambiguous finality channels", () => {
     const sameSource = draft();
     sameSource.resolutionRule.witnessSourceId = sameSource.resolutionRule.primarySourceId;
     expectValidationCode(() => parseArcMarketSpecDraft(sameSource), "SOURCE_NOT_INDEPENDENT");

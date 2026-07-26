@@ -50,7 +50,7 @@ export const ARC_MCP_TOOLS = [
   },
   {
     name: "airarena_arc_list_fixtures",
-    description: "List Sportmonks-primary sports fixtures qualified by an independent TxLINE witness for the Arc market layer.",
+    description: "List operational Sportmonks sports fixtures admitted to the AIR Arena Arc market layer.",
     inputSchema: {
       type: "object",
       properties: { limit: { type: "integer", minimum: 1, maximum: 100, default: 50 } },

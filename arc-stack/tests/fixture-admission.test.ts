@@ -3,29 +3,19 @@ import { describe, expect, it } from "vitest";
 import { ARC_CHAIN_ID, ARC_USDC_ADDRESS, loadConfig } from "../src/config.js";
 import {
   buildAutomaticMarketSpec,
-  matchSportmonksPrimaryFixture,
-  txlineWitnessEligibility,
+  normalizeSportmonksFixturePage,
+  sportmonksFixtureEligibility,
   type SportmonksFixture,
-  type TxlineFixture,
 } from "../src/fixture-admission.js";
 import { ARC_EXCHANGE_V3_ADDRESS, verifyFinalizedArcMarketSpec } from "../src/market-spec.js";
 
-const txlineWitness: TxlineFixture = {
-  fixtureId: "18272873",
-  sport: "football",
-  homeTeam: "Azerbaijan",
-  awayTeam: "Tajikistan",
-  startsAt: "2026-09-23T15:00:00.000Z",
-  status: "upcoming",
-  marketTypes: ["1X2_PARTICIPANT_RESULT"],
-};
-
-const witness = (data: unknown[], subscription: unknown[] = [{ plans: [{ plan: "Pro - Trialing" }] }]) => ({
+const providerPage = (data: unknown[], subscription: unknown[] = [{ plans: [{ plan: "Pro - Trialing" }] }]) => ({
   data,
   subscription,
+  pagination: { current_page: 1, next_page: null, has_more: false },
 });
 
-const witnessFixture = (id: number, home = "Azerbaijan", away = "Tajikistan", startingAt = "2026-09-23 00:00:00") => ({
+const providerFixture = (id: number, home = "Azerbaijan", away = "Tajikistan", startingAt = "2026-09-23 00:00:00") => ({
   id,
   starting_at: startingAt,
   participants: [
@@ -40,52 +30,40 @@ const sportmonksPrimary: SportmonksFixture = {
   awayTeam: "Tajikistan",
   startsAt: "2026-09-23 15:00:00",
   accessTier: "TRIAL",
-  raw: witnessFixture(19766419, "Azerbaijan", "Tajikistan", "2026-09-23 15:00:00"),
+  raw: providerFixture(19766419, "Azerbaijan", "Tajikistan", "2026-09-23 15:00:00"),
 };
 
 describe("automatic fixture admission", () => {
-  it("admits only future football 1X2 fixtures inside the configured window", () => {
+  it("pages Sportmonks directly and admits fixtures inside the configured window", () => {
     const nowMs = Date.parse("2026-07-26T00:00:00.000Z");
-    expect(txlineWitnessEligibility(txlineWitness, { nowMs, horizonDays: 180, minLeadSeconds: 3600 }))
-      .toMatchObject({ eligible: true });
-    expect(txlineWitnessEligibility({ ...txlineWitness, sport: "cricket" }, { nowMs, horizonDays: 180, minLeadSeconds: 3600 }))
-      .toEqual({ eligible: false, reason: "unsupported_sport" });
-    expect(txlineWitnessEligibility({ ...txlineWitness, marketTypes: [] }, { nowMs, horizonDays: 180, minLeadSeconds: 3600 }))
-      .toEqual({ eligible: false, reason: "unsupported_market_template" });
-    expect(txlineWitnessEligibility({ ...txlineWitness, status: "live" }, { nowMs, horizonDays: 180, minLeadSeconds: 3600 }))
-      .toEqual({ eligible: false, reason: "fixture_not_upcoming:live" });
-  });
-
-  it("binds a unique same-orientation, same-date Sportmonks primary fixture", () => {
-    expect(matchSportmonksPrimaryFixture(txlineWitness, witness([witnessFixture(19766419)]))).toMatchObject({
-      kind: "MATCH",
-      primary: {
+    const page = normalizeSportmonksFixturePage(providerPage([
+      providerFixture(19766419, "Azerbaijan", "Tajikistan", "2026-09-23 15:00:00"),
+    ]));
+    expect(page).toMatchObject({
+      nextPage: null,
+      fixtures: [{
         fixtureIdentity: "19766419",
         homeTeam: "Azerbaijan",
         awayTeam: "Tajikistan",
         accessTier: "TRIAL",
+      }],
+    });
+    expect(sportmonksFixtureEligibility(page.fixtures[0]!, { nowMs, horizonDays: 180, minLeadSeconds: 3600 }))
+      .toMatchObject({ eligible: true });
+    expect(sportmonksFixtureEligibility({ ...page.fixtures[0]!, startsAt: "2026-07-26 00:30:00" }, {
+      nowMs, horizonDays: 180, minLeadSeconds: 3600,
+    })).toEqual({ eligible: false, reason: "fixture_inside_minimum_lead_window" });
+    expect(normalizeSportmonksFixturePage({
+      ...providerPage([providerFixture(19766419)]),
+      pagination: {
+        current_page: 1,
+        has_more: true,
+        next_page: "https://api.sportmonks.com/v3/football/fixtures/between/2026-09-23/2026-09-29?page=2",
       },
-    });
-    expect(matchSportmonksPrimaryFixture(txlineWitness, witness([witnessFixture(1, "Tajikistan", "Azerbaijan")]))).toEqual({
-      kind: "NONE",
-      reason: "qualifying_primary_fixture_not_found",
-    });
-    expect(matchSportmonksPrimaryFixture(txlineWitness, witness([witnessFixture(1, undefined, undefined, "2026-09-24 00:00:00")]))).toEqual({
-      kind: "NONE",
-      reason: "qualifying_primary_fixture_not_found",
-    });
-  });
-
-  it("fails closed for ambiguous or paid Sportmonks primary results", () => {
-    expect(matchSportmonksPrimaryFixture(txlineWitness, witness([witnessFixture(2), witnessFixture(1)]))).toMatchObject({
-      kind: "AMBIGUOUS",
-      reason: "multiple_qualifying_primary_fixtures",
-      candidates: [{ fixtureIdentity: "1" }, { fixtureIdentity: "2" }],
-    });
-    expect(matchSportmonksPrimaryFixture(txlineWitness, witness([witnessFixture(1)], [{ plans: [{ plan: "Pro Annual" }] }]))).toEqual({
-      kind: "NONE",
-      reason: "primary_paid_subscription_forbidden",
-    });
+    }).nextPage).toBe(2);
+    expect(() => normalizeSportmonksFixturePage(providerPage([
+      providerFixture(1),
+    ], [{ plans: [{ plan: "Pro Annual" }] }]))).toThrow("fixture_admission_paid_subscription_forbidden");
   });
 
   it("derives a deterministic canonical V3 market identity and immutable specification", () => {
@@ -96,8 +74,8 @@ describe("automatic fixture admission", () => {
       oraclePrimarySignerPrivateKey: `0x${"11".repeat(32)}` as `0x${string}`,
       oracleWitnessSignerPrivateKey: `0x${"12".repeat(32)}` as `0x${string}`,
     };
-    const first = buildAutomaticMarketSpec(config, txlineWitness, sportmonksPrimary);
-    const second = buildAutomaticMarketSpec(config, { ...txlineWitness }, { ...sportmonksPrimary });
+    const first = buildAutomaticMarketSpec(config, sportmonksPrimary);
+    const second = buildAutomaticMarketSpec(config, { ...sportmonksPrimary });
     expect(first).toEqual(second);
     expect(first.scheduledStartAt).toBe("2026-09-23T15:00:00Z");
     expect(() => verifyFinalizedArcMarketSpec(first)).not.toThrow();
@@ -109,7 +87,7 @@ describe("automatic fixture admission", () => {
         adapter: "sportmonks.football.v3",
         fixtureId: sportmonksPrimary.fixtureIdentity,
         primarySourceId: "sportmonks-primary",
-        witnessSourceId: "txline-witness",
+        witnessSourceId: "sportmonks-confirmation",
       },
     });
     expect(first.marketId).toMatch(/^0x[0-9a-f]{64}$/);

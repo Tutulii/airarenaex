@@ -7,11 +7,9 @@ import type { Logger } from "./logger.js";
 import type { createMetrics } from "./metrics.js";
 import { cancelProtocolLiquidityOrders } from "./liquidity-agent.js";
 import {
+  deriveSportmonksConfirmation,
   fetchSportmonksOracleReport,
-  fetchTxlineOracleReport,
   ORACLE_ADAPTERS,
-  parseOracleSse,
-  parseTxlineScoreSseReports,
 } from "./oracle-adapter.js";
 import {
   evaluateOracleQuorum,
@@ -35,100 +33,6 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-/**
- * Optional TxLINE SSE ingestion. REST remains the authoritative poll used for
- * quorum construction; SSE supplies lower-latency append-only evidence. Both
- * paths use the same parser, deterministic selector, and Day 18 verifier.
- */
-export async function runTxlineSseWatcher(
-  config: ArcConfig,
-  db: Database,
-  logger: Logger,
-  state: ResultWatcherState,
-): Promise<void> {
-  if (!config.txlineSseUrl) return;
-  if (!config.txlineApiToken) throw new Error("oracle_txline_sse_token_missing");
-  let lastEventId: string | null = null;
-  let retryMs = 1_000;
-  let guestJwt = config.txlineGuestJwt ?? null;
-  while (!state.stopping) {
-    const controller = new AbortController();
-    const stopTimer = setInterval(() => {
-      if (state.stopping) controller.abort();
-    }, 500);
-    try {
-      if (!guestJwt) {
-        const authUrl = new URL("/auth/guest/start", config.txlineSseUrl);
-        const authResponse = await fetch(authUrl, {
-          method: "POST",
-          headers: { accept: "application/json", "user-agent": "airarena-arc-oracle-adapter/1" },
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!authResponse.ok) throw new Error(`oracle_txline_guest_auth_http_${authResponse.status}`);
-        const authPayload = await authResponse.json() as { token?: unknown };
-        if (typeof authPayload.token !== "string" || !authPayload.token.trim()) {
-          throw new Error("oracle_txline_guest_auth_token_missing");
-        }
-        guestJwt = authPayload.token;
-      }
-      const headers: Record<string, string> = {
-        accept: "text/event-stream",
-        "cache-control": "no-cache",
-        "user-agent": "airarena-arc-oracle-adapter/1",
-        authorization: `Bearer ${guestJwt}`,
-        "x-api-token": config.txlineApiToken,
-      };
-      if (lastEventId) headers["last-event-id"] = lastEventId;
-      const response = await fetch(config.txlineSseUrl, { headers, signal: controller.signal });
-      if (!response.ok || !response.body) throw new Error(`oracle_txline_sse_http_${response.status}`);
-      retryMs = 1_000;
-      for await (const event of parseOracleSse(response.body)) {
-        if (state.stopping) break;
-        if (event.id) lastEventId = event.id;
-        // TxLINE sends `event: heartbeat` frames containing only `{ Ts }`.
-        // They prove transport liveness, not fixture evidence, and therefore
-        // must never enter the immutable evidence log or oracle-health quorum.
-        if (event.event === "heartbeat") continue;
-        try {
-          const raw = JSON.stringify(event.data);
-          const reports = parseTxlineScoreSseReports(event.data, raw, new Date().toISOString(), event.id);
-          for (const report of reports) {
-            const markets = await db.query<{ market_id: Hex }>(
-              `SELECT market_id FROM arc_markets
-                WHERE ((primary_adapter_id = $1 AND primary_fixture_identity = $2)
-                    OR (witness_adapter_id = $1 AND witness_fixture_identity = $2))
-                  AND status IN ('QUEUED','OPEN')
-                ORDER BY market_id`,
-              [ORACLE_ADAPTERS.TXLINE_V1, report.fixtureIdentity],
-            );
-            if (markets.rows.length === 0) {
-              await storeOracleReport(db, report, null);
-            } else {
-              // A report hash is globally immutable. Associate it with the first
-              // canonical market; all markets select it by adapter + fixture.
-              await storeOracleReport(db, report, markets.rows[0]!.market_id);
-            }
-          }
-          state.lastResultSourceOkAt = new Date().toISOString();
-        } catch (error) {
-          logger.warn({ err: error, eventId: event.id }, "arc_txline_sse_event_rejected");
-        }
-      }
-    } catch (error) {
-      // Guest JWTs are short-lived. Force a fresh one on any disconnect unless
-      // an explicitly managed JWT was configured.
-      if (!config.txlineGuestJwt) guestJwt = null;
-      if (!state.stopping) logger.warn({ err: error, retryMs }, "arc_txline_sse_disconnected");
-    } finally {
-      clearInterval(stopTimer);
-    }
-    if (!state.stopping) {
-      await delay(retryMs);
-      retryMs = Math.min(retryMs * 2, 30_000);
-    }
-  }
-}
-
 type ResolutionRule = {
   primarySourceId: Hex;
   witnessSourceId: Hex;
@@ -150,6 +54,7 @@ type CandidateMarket = {
   primary_fixture_identity: string;
   witness_adapter_id: string;
   witness_fixture_identity: string;
+  settlement_policy: string;
 };
 
 function errorMessage(error: unknown): string {
@@ -158,12 +63,12 @@ function errorMessage(error: unknown): string {
 
 async function candidates(db: Database): Promise<CandidateMarket[]> {
   const result = await db.query<CandidateMarket>(
-    `SELECT market_id, fixture_id, spec_hash, close_time, resolution_rule,
+    `SELECT market_id, fixture_id, spec_hash, close_time, resolution_rule, settlement_policy,
             primary_adapter_id, primary_fixture_identity,
             witness_adapter_id, witness_fixture_identity
        FROM arc_markets
       WHERE status = 'OPEN'
-        AND settlement_policy IN ('TXLINE_1X2_REGULATION','SPORTMONKS_PRIMARY_1X2_REGULATION')
+        AND settlement_policy IN ('TXLINE_1X2_REGULATION','SPORTMONKS_PRIMARY_1X2_REGULATION','SPORTMONKS_ONLY_1X2_REGULATION')
         AND outcome_count = 3
         AND resolution_job_id IS NULL
         AND witness_qualified_at IS NOT NULL
@@ -199,44 +104,32 @@ async function observeAndSchedule(
       || !config.oraclePrimarySignerPrivateKey || !config.oracleWitnessSignerPrivateKey) {
     throw new Error("oracle_runtime_not_configured");
   }
-  const sportmonksPrimary = market.primary_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1
-    && market.witness_adapter_id === ORACLE_ADAPTERS.TXLINE_V1;
-  const txlinePrimary = market.primary_adapter_id === ORACLE_ADAPTERS.TXLINE_V1
-    && market.witness_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1;
-  if (!sportmonksPrimary && !txlinePrimary) {
+  if (market.settlement_policy !== "SPORTMONKS_ONLY_1X2_REGULATION") {
+    const jobId = await scheduleGraceInvalidation(db, market);
+    return jobId ? { kind: "INVALIDATION", jobId } : { kind: "PENDING" };
+  }
+  const sportmonksOnly = market.primary_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1
+    && market.witness_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_CONFIRMATION_V1
+    && market.primary_fixture_identity === market.witness_fixture_identity;
+  if (!sportmonksOnly) {
     throw new Error("oracle_market_adapter_binding_unsupported");
   }
-  const [sportmonksReport, txlineRest] = await Promise.all([
-    fetchSportmonksOracleReport(
-      config.sportmonksApiUrl,
-      config.sportmonksApiToken,
-      sportmonksPrimary ? market.primary_fixture_identity : market.witness_fixture_identity,
-      10_000,
-      false,
-    ),
-    fetchTxlineOracleReport(
-      config.txlineSourceUrl,
-      sportmonksPrimary ? market.witness_fixture_identity : market.primary_fixture_identity,
-    ),
-  ]);
-  const selectedTxline = txlineRest
-    ? { report: txlineRest, conflicted: false }
-    : await readSelectedOracleReport(
-      db,
-      ORACLE_ADAPTERS.TXLINE_V1,
-      sportmonksPrimary ? market.witness_fixture_identity : market.primary_fixture_identity,
-    );
+  const sportmonksReport = await fetchSportmonksOracleReport(
+    config.sportmonksApiUrl,
+    config.sportmonksApiToken,
+    market.primary_fixture_identity,
+    10_000,
+    false,
+  );
   const selectedSportmonks = sportmonksReport
     ? { report: sportmonksReport, conflicted: false }
     : await readSelectedOracleReport(
       db,
       ORACLE_ADAPTERS.SPORTMONKS_V1,
-      sportmonksPrimary ? market.primary_fixture_identity : market.witness_fixture_identity,
+      market.primary_fixture_identity,
     );
-  const selectedPrimary = sportmonksPrimary ? selectedSportmonks : selectedTxline;
-  const selectedWitness = sportmonksPrimary ? selectedTxline : selectedSportmonks;
-  const primary = selectedPrimary.report;
-  const witness = selectedWitness.report;
+  const primary = selectedSportmonks.report;
+  const witness = primary ? deriveSportmonksConfirmation(primary) : null;
   const primaryStored = primary ? await storeOracleReport(db, primary, market.market_id) : null;
   const witnessStored = witness ? await storeOracleReport(db, witness, market.market_id) : null;
   const sourceWindow = {
@@ -248,8 +141,7 @@ async function observeAndSchedule(
   let quorum = resolutionDue
     ? evaluateOracleQuorum(primary, witness, sourceWindow)
     : evaluateOracleLiveHealth(primary, witness, sourceWindow);
-  if (selectedPrimary.conflicted || selectedWitness.conflicted
-      || primaryStored?.conflicted || witnessStored?.conflicted) {
+  if (selectedSportmonks.conflicted || primaryStored?.conflicted || witnessStored?.conflicted) {
     quorum = {
       state: "MALFORMED",
       primary,

@@ -5,6 +5,7 @@ import { z } from "zod";
 export const ORACLE_ADAPTERS = {
   TXLINE_V1: "txline.sports-result.v1",
   SPORTMONKS_V1: "sportmonks.football.v3",
+  SPORTMONKS_CONFIRMATION_V1: "sportmonks.football.v3.confirmation",
   OFFICIAL_COMPETITION_V1: "official.competition.v1",
   PYTH_V1: "pyth.price.v1",
   ELECTION_V1: "election.result.v1",
@@ -21,7 +22,11 @@ export type OracleAdapterRegistration = {
 
 export const ORACLE_ADAPTER_REGISTRY: readonly OracleAdapterRegistration[] = [
   { id: ORACLE_ADAPTERS.SPORTMONKS_V1, enabled: true, category: "SPORTS", role: "PRIMARY", paid: false },
-  { id: ORACLE_ADAPTERS.TXLINE_V1, enabled: true, category: "SPORTS", role: "WITNESS", paid: false },
+  // V3's frozen contract interface requires two separately signed evidence
+  // envelopes. This adapter is an AIR Arena confirmation of the exact same
+  // immutable Sportmonks payload, not a second external data provider.
+  { id: ORACLE_ADAPTERS.SPORTMONKS_CONFIRMATION_V1, enabled: true, category: "SPORTS", role: "WITNESS", paid: false },
+  { id: ORACLE_ADAPTERS.TXLINE_V1, enabled: false, category: "SPORTS", role: "RESERVED", paid: false },
   { id: ORACLE_ADAPTERS.OFFICIAL_COMPETITION_V1, enabled: false, category: "SPORTS", role: "WITNESS", paid: false },
   { id: ORACLE_ADAPTERS.PYTH_V1, enabled: false, category: "CRYPTO", role: "RESERVED", paid: false },
   { id: ORACLE_ADAPTERS.ELECTION_V1, enabled: false, category: "POLITICS", role: "RESERVED", paid: false },
@@ -346,6 +351,36 @@ export function parseSportmonksOracleReport(payload: unknown, rawResponse = cano
     homeScore,
     awayScore,
     correctionRank: 0,
+  });
+}
+
+/**
+ * Build the second V3 evidence envelope from the same authenticated Sportmonks
+ * payload. The fixture, score, timestamp and outcome remain bound to the exact
+ * primary payload hash; only the adapter identity and proof role differ so a
+ * distinct configured signer can attest it.
+ */
+export function deriveSportmonksConfirmation(report: NormalizedOracleReport): NormalizedOracleReport {
+  if (report.adapterId !== ORACLE_ADAPTERS.SPORTMONKS_V1) {
+    throw new Error("oracle_sportmonks_confirmation_primary_required");
+  }
+  return buildReport({
+    adapterId: ORACLE_ADAPTERS.SPORTMONKS_CONFIRMATION_V1,
+    fixtureIdentity: report.fixtureIdentity,
+    sequence: report.sequence,
+    timestamp: report.timestamp,
+    observedAt: report.observedAt,
+    rawResponse: report.rawResponse,
+    proof: {
+      ...report.proof,
+      kind: "SPORTMONKS_AUTHENTICATED_HTTPS_CONFIRMATION",
+      primaryReportHash: report.reportHash,
+    },
+    finalResult: report.finalResult,
+    normalizedOutcome: report.normalizedOutcome,
+    homeScore: report.homeScore,
+    awayScore: report.awayScore,
+    correctionRank: report.correctionRank,
   });
 }
 

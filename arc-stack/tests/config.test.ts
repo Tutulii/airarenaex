@@ -54,7 +54,7 @@ describe("Arc configuration boundary", () => {
     }).batchMaxOrders).toBe(40);
   });
 
-  it("fails closed when authenticated TxLINE SSE is enabled without its API token", () => {
+  it("does not require legacy TxLINE credentials for Sportmonks-only operation", () => {
     const productionMiddleman = {
       ...base,
       NODE_ENV: "production",
@@ -70,13 +70,8 @@ describe("Arc configuration boundary", () => {
       ARC_ORACLE_WITNESS_SIGNER_PRIVATE_KEY: "0x" + "16".repeat(32),
       ARC_LIQUIDITY_AGENT_PRIVATE_KEY: "0x" + "17".repeat(32),
       ARC_LIQUIDITY_AGENT_ADDRESS: "0x7e9fb40f66c4e132Fa5E64E49f307E02B76540f8",
-      TXLINE_SOURCE_URL: "https://txline-source.example",
-      TXLINE_SSE_URL: "https://txline.example/api/scores/stream",
     };
-    expect(() => loadConfig(productionMiddleman)).toThrow(
-      "TXLINE_API_TOKEN is required when TXLINE_SSE_URL is configured",
-    );
-    expect(loadConfig({ ...productionMiddleman, TXLINE_API_TOKEN: "x".repeat(16) }).txlineSseUrl)
-      .toBe("https://txline.example/api/scores/stream");
+    expect(() => loadConfig(productionMiddleman)).not.toThrow();
+    expect(loadConfig(productionMiddleman).sportmonksApiToken).toBe("trial-token-value");
   });
 });

@@ -41,7 +41,7 @@ import {
 } from "./jobs.js";
 import type { Logger } from "./logger.js";
 import { createMetrics } from "./metrics.js";
-import { resultWatcherReady, runResultWatcher, runTxlineSseWatcher } from "./settlement-watcher.js";
+import { resultWatcherReady, runResultWatcher } from "./settlement-watcher.js";
 import { runProtocolLiquidityAgent } from "./liquidity-agent.js";
 import { fixtureAdmissionReady, runFixtureAdmissionWorker } from "./fixture-admission.js";
 import { ORACLE_ADAPTERS } from "./oracle-adapter.js";
@@ -894,12 +894,9 @@ async function sendContractTransaction(
         [payload.marketId],
       );
       const binding = qualified.rows[0];
-      const supportedBinding = binding && (
-        (binding.primary_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1
-          && binding.witness_adapter_id === ORACLE_ADAPTERS.TXLINE_V1)
-        || (binding.primary_adapter_id === ORACLE_ADAPTERS.TXLINE_V1
-          && binding.witness_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1)
-      );
+      const supportedBinding = binding
+        && binding.primary_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_V1
+        && binding.witness_adapter_id === ORACLE_ADAPTERS.SPORTMONKS_CONFIRMATION_V1;
       if (!binding
           || !supportedBinding
           || !binding.witness_qualified_at
@@ -1499,7 +1496,6 @@ export async function startMiddleman(config: ArcConfig, logger: Logger): Promise
   void processJobs(config, db, logger, state, metrics);
   void runIndexer(config, db, logger, state, metrics);
   void runResultWatcher(config, db, logger, state, metrics);
-  void runTxlineSseWatcher(config, db, logger, state);
   void runProtocolLiquidityAgent(config, db, logger, state);
   void runFixtureAdmissionWorker(config, db, logger, state);
 }

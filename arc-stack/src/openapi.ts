@@ -200,9 +200,9 @@ export function buildExchangeOpenApi(errorCodes: ErrorCode[]) {
               properties: {
                 primaryAdapterId: { const: "sportmonks.football.v3" },
                 primaryFixtureIdentity: { type: "string", minLength: 1, maxLength: 256 },
-                witnessAdapterId: { const: "txline.sports-result.v1" },
+                witnessAdapterId: { const: "sportmonks.football.v3.confirmation" },
                 witnessFixtureIdentity: { type: "string", minLength: 1, maxLength: 256 },
-                witnessAccessTier: { const: "FREE" },
+                witnessAccessTier: { type: "string", enum: ["FREE", "TRIAL"] },
                 witnessAuthenticated: { const: true },
               },
               additionalProperties: false,

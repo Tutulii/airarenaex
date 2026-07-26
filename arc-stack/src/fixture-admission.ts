@@ -18,31 +18,13 @@ import { verifyQualifyingWitness, type WitnessBinding } from "./oracle-state.js"
 import { assertActiveMarketCap } from "./risk-controls.js";
 
 const PRIMARY_SOURCE_ID = "sportmonks-primary";
-const WITNESS_SOURCE_ID = "txline-witness";
+const WITNESS_SOURCE_ID = "sportmonks-confirmation";
 const PRIMARY_SOURCE_ID_HASH = keccak256(stringToHex("air-arena/oracle/sportmonks-primary/v1"));
-const WITNESS_SOURCE_ID_HASH = keccak256(stringToHex("air-arena/oracle/txline-witness/v1"));
+const WITNESS_SOURCE_ID_HASH = keccak256(stringToHex("air-arena/oracle/sportmonks-confirmation/v1"));
 const TRADING_WINDOW_SECONDS = 365 * 24 * 60 * 60;
 const TRADING_CLOSE_OFFSET_SECONDS = 119 * 60;
 const RESOLUTION_EARLIEST_OFFSET_SECONDS = 120 * 60;
 const RESOLUTION_GRACE_SECONDS = 900;
-
-const TxlineFixtureSchema = z.object({
-  fixtureId: z.union([z.string(), z.number()]).transform(String),
-  sport: z.string(),
-  homeTeam: z.string().trim().min(1),
-  awayTeam: z.string().trim().min(1),
-  startsAt: z.string(),
-  status: z.string(),
-  marketTypes: z.array(z.string()).default([]),
-  raw: z.unknown().optional(),
-}).passthrough();
-
-const TxlineFixtureEnvelopeSchema = z.object({
-  data: z.union([
-    z.array(TxlineFixtureSchema),
-    z.object({ data: z.array(TxlineFixtureSchema) }).passthrough(),
-  ]),
-}).passthrough();
 
 const SportmonksParticipantSchema = z.object({
   id: z.union([z.string(), z.number()]),
@@ -59,6 +41,11 @@ const SportmonksFixtureSchema = z.object({
 const SportmonksDateEnvelopeSchema = z.object({
   data: z.array(SportmonksFixtureSchema),
   subscription: z.array(z.unknown()).min(1),
+  pagination: z.object({
+    current_page: z.number().int().positive().optional(),
+    next_page: z.union([z.number().int().positive(), z.string().url()]).nullable().optional(),
+    has_more: z.boolean().optional(),
+  }).passthrough().optional(),
 }).passthrough();
 
 export type AdmissionRuntimeState = {
@@ -70,8 +57,6 @@ export type AdmissionRuntimeState = {
   fixtureAdmissionAdmitted: number;
 };
 
-export type TxlineFixture = z.infer<typeof TxlineFixtureSchema>;
-
 export type SportmonksFixture = {
   fixtureIdentity: string;
   homeTeam: string;
@@ -80,11 +65,6 @@ export type SportmonksFixture = {
   accessTier: "FREE" | "TRIAL";
   raw: unknown;
 };
-
-export type SportmonksMatch =
-  | { kind: "MATCH"; primary: SportmonksFixture }
-  | { kind: "NONE"; reason: string }
-  | { kind: "AMBIGUOUS"; reason: string; candidates: SportmonksFixture[] };
 
 export type AdmissionCycleResult = {
   scanned: number;
@@ -124,32 +104,54 @@ function parseProviderUtc(value: string): Date {
   return date;
 }
 
-function sameUtcDate(left: string, right: string): boolean {
-  try {
-    return parseProviderUtc(left).toISOString().slice(0, 10)
-      === parseProviderUtc(right).toISOString().slice(0, 10);
-  } catch {
-    return false;
-  }
+function participantAt(fixture: z.infer<typeof SportmonksFixtureSchema>, location: "home" | "away"): string | null {
+  const participants = fixture.participants.filter((participant) => participant.meta?.location === location);
+  return participants.length === 1 ? participants[0]!.name : null;
 }
 
-export function txlineWitnessEligibility(
-  fixture: TxlineFixture,
+export function normalizeSportmonksFixturePage(payload: unknown): {
+  fixtures: SportmonksFixture[];
+  nextPage: number | null;
+} {
+  const parsed = SportmonksDateEnvelopeSchema.parse(payload);
+  const accessTier = sportmonksAccessTier(parsed.subscription);
+  if (!accessTier) throw new Error("fixture_admission_paid_subscription_forbidden");
+  const fixtures = parsed.data.flatMap((fixture) => {
+    const homeTeam = participantAt(fixture, "home");
+    const awayTeam = participantAt(fixture, "away");
+    if (!homeTeam || !awayTeam) return [];
+    return [{
+      fixtureIdentity: fixture.id,
+      homeTeam,
+      awayTeam,
+      startsAt: fixture.starting_at,
+      accessTier,
+      raw: fixture,
+    }];
+  }).sort((left, right) => {
+    const time = parseProviderUtc(left.startsAt).getTime() - parseProviderUtc(right.startsAt).getTime();
+    return time || left.fixtureIdentity.localeCompare(right.fixtureIdentity);
+  });
+  const pagination = parsed.pagination;
+  const providerNextPage = typeof pagination?.next_page === "string"
+    ? Number(new URL(pagination.next_page).searchParams.get("page"))
+    : pagination?.next_page;
+  const validProviderNextPage = Number.isInteger(providerNextPage) && Number(providerNextPage) > 0
+    ? Number(providerNextPage)
+    : null;
+  const nextPage = validProviderNextPage
+    ?? (pagination?.has_more ? (pagination.current_page ?? 1) + 1 : null);
+  return { fixtures, nextPage };
+}
+
+export function sportmonksFixtureEligibility(
+  fixture: SportmonksFixture,
   options: { nowMs: number; horizonDays: number; minLeadSeconds: number },
 ): { eligible: true; startsAt: Date } | { eligible: false; reason: string } {
-  if (fixture.sport.trim().toLowerCase() !== "football") return { eligible: false, reason: "unsupported_sport" };
-  if (!fixture.marketTypes.includes("1X2_PARTICIPANT_RESULT")) {
-    return { eligible: false, reason: "unsupported_market_template" };
-  }
-  const status = fixture.status.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (!["upcoming", "scheduled", "not_started", "notstarted", "pre_match"].includes(status)) {
-    return { eligible: false, reason: `fixture_not_upcoming:${status}` };
-  }
   if (normalizeTeam(fixture.homeTeam) === normalizeTeam(fixture.awayTeam)) {
     return { eligible: false, reason: "fixture_participants_not_distinct" };
   }
-  const startsAt = new Date(fixture.startsAt);
-  if (!Number.isFinite(startsAt.getTime())) return { eligible: false, reason: "fixture_start_time_invalid" };
+  const startsAt = parseProviderUtc(fixture.startsAt);
   if (startsAt.getTime() < options.nowMs + options.minLeadSeconds * 1_000) {
     return { eligible: false, reason: "fixture_inside_minimum_lead_window" };
   }
@@ -159,43 +161,9 @@ export function txlineWitnessEligibility(
   return { eligible: true, startsAt };
 }
 
-function participantAt(fixture: z.infer<typeof SportmonksFixtureSchema>, location: "home" | "away"): string | null {
-  const participants = fixture.participants.filter((participant) => participant.meta?.location === location);
-  return participants.length === 1 ? participants[0]!.name : null;
-}
-
-export function matchSportmonksPrimaryFixture(witness: TxlineFixture, payload: unknown): SportmonksMatch {
-  const parsed = SportmonksDateEnvelopeSchema.parse(payload);
-  const accessTier = sportmonksAccessTier(parsed.subscription);
-  if (!accessTier) return { kind: "NONE", reason: "primary_paid_subscription_forbidden" };
-  const expectedHome = normalizeTeam(witness.homeTeam);
-  const expectedAway = normalizeTeam(witness.awayTeam);
-  const matches: SportmonksFixture[] = parsed.data.flatMap((fixture) => {
-    const home = participantAt(fixture, "home");
-    const away = participantAt(fixture, "away");
-    if (!home || !away) return [];
-    if (normalizeTeam(home) !== expectedHome || normalizeTeam(away) !== expectedAway) return [];
-    if (!sameUtcDate(witness.startsAt, fixture.starting_at)) return [];
-    return [{
-      fixtureIdentity: fixture.id,
-      homeTeam: home,
-      awayTeam: away,
-      startsAt: fixture.starting_at,
-      accessTier,
-      raw: fixture,
-    }];
-  }).sort((left, right) => left.fixtureIdentity.localeCompare(right.fixtureIdentity));
-  if (matches.length === 0) return { kind: "NONE", reason: "qualifying_primary_fixture_not_found" };
-  if (matches.length > 1) {
-    return { kind: "AMBIGUOUS", reason: "multiple_qualifying_primary_fixtures", candidates: matches };
-  }
-  return { kind: "MATCH", primary: matches[0]! };
-}
-
 export function buildAutomaticMarketSpec(
   config: Pick<ArcConfig,
     "chainId" | "usdcAddress" | "exchangeAddress" | "oraclePrimarySignerPrivateKey" | "oracleWitnessSignerPrivateKey">,
-  witness: TxlineFixture,
   primary: SportmonksFixture,
 ): FinalizedArcMarketSpec {
   if (config.chainId !== ARC_CHAIN_ID || config.usdcAddress !== getAddress(ARC_USDC_ADDRESS)) {
@@ -206,11 +174,6 @@ export function buildAutomaticMarketSpec(
   }
   if (!config.oraclePrimarySignerPrivateKey || !config.oracleWitnessSignerPrivateKey) {
     throw new Error("fixture_admission_oracle_signers_missing");
-  }
-  if (normalizeTeam(primary.homeTeam) !== normalizeTeam(witness.homeTeam)
-      || normalizeTeam(primary.awayTeam) !== normalizeTeam(witness.awayTeam)
-      || !sameUtcDate(witness.startsAt, primary.startsAt)) {
-    throw new Error("fixture_admission_provider_identity_mismatch");
   }
   const startsAt = parseProviderUtc(primary.startsAt);
   const startSeconds = Math.floor(startsAt.getTime() / 1_000);
@@ -276,6 +239,9 @@ export function buildAutomaticMarketSpec(
       },
       oracle: {
         version: "arc.oracle-v1",
+        // The V3 contract has a frozen two-envelope interface. Both envelopes
+        // bind one Sportmonks payload and are signed by separate AIR Arena
+        // keys; this value does not represent two external providers.
         minimumIndependentSources: 2,
         maxReportAgeSeconds: 120,
         maxSourceTimestampSkewSeconds: 30,
@@ -320,45 +286,62 @@ export function buildAutomaticMarketSpec(
   return finalizeArcMarketSpec(draft);
 }
 
-async function fetchTxlineWitnessFixtures(config: ArcConfig): Promise<TxlineFixture[]> {
-  const response = await fetch(`${config.txlineSourceUrl}/v1/txline/fixtures?limit=${config.fixtureAdmission.scanLimit}`, {
-    headers: { accept: "application/json", "user-agent": "airarena-arc-fixture-admission/1" },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) throw new Error(`fixture_admission_primary_http_${response.status}`);
-  const raw = await response.text();
-  if (raw.length > 5_000_000) throw new Error("fixture_admission_primary_payload_too_large");
-  const parsed = TxlineFixtureEnvelopeSchema.parse(JSON.parse(raw) as unknown);
-  const fixtures = Array.isArray(parsed.data) ? parsed.data : parsed.data.data;
-  const byId = new Map<string, TxlineFixture>();
-  for (const fixture of [...fixtures].sort((left, right) => {
-    const id = left.fixtureId.localeCompare(right.fixtureId);
-    return id || canonicalOracleJson(left).localeCompare(canonicalOracleJson(right));
-  })) {
-    const existing = byId.get(fixture.fixtureId);
-    if (existing && hashJson(existing) !== hashJson(fixture)) throw new Error(`fixture_admission_primary_identity_conflict:${fixture.fixtureId}`);
-    byId.set(fixture.fixtureId, fixture);
-  }
-  return [...byId.values()].sort((left, right) => {
-    const time = Date.parse(left.startsAt) - Date.parse(right.startsAt);
-    return time || left.fixtureId.localeCompare(right.fixtureId);
-  });
+type AdmissionCursor = { windowStart: string; page: number };
+const ADMISSION_WINDOW_DAYS = 7;
+const MAX_PROVIDER_PAGES_PER_CYCLE = 10;
+
+function utcDate(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
 }
 
-async function fetchSportmonksPrimaryDate(config: ArcConfig, utcDate: string): Promise<unknown> {
+function nextWindow(cursor: AdmissionCursor): AdmissionCursor {
+  return {
+    windowStart: utcDate(Date.parse(`${cursor.windowStart}T00:00:00Z`) + ADMISSION_WINDOW_DAYS * 86_400_000),
+    page: 1,
+  };
+}
+
+async function readAdmissionCursor(db: Database, config: ArcConfig, nowMs: number): Promise<AdmissionCursor> {
+  const today = utcDate(nowMs);
+  const horizonEnd = utcDate(nowMs + config.fixtureAdmission.horizonDays * 86_400_000);
+  const result = await db.query<{ value: { windowStart?: unknown; page?: unknown } }>(
+    "SELECT value FROM arc_runtime_state WHERE key = 'sportmonks_admission_cursor'",
+  );
+  const stored = result.rows[0]?.value;
+  const windowStart = typeof stored?.windowStart === "string" ? stored.windowStart : today;
+  const page = typeof stored?.page === "number" && Number.isInteger(stored.page) && stored.page > 0 ? stored.page : 1;
+  if (windowStart < today || windowStart > horizonEnd) return { windowStart: today, page: 1 };
+  return { windowStart, page };
+}
+
+async function writeAdmissionCursor(db: Database, cursor: AdmissionCursor): Promise<void> {
+  await db.query(
+    `INSERT INTO arc_runtime_state(key, value, updated_at)
+     VALUES ('sportmonks_admission_cursor', $1::jsonb, clock_timestamp())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = clock_timestamp()`,
+    [JSON.stringify(cursor)],
+  );
+}
+
+async function fetchSportmonksFixturePage(
+  config: ArcConfig,
+  cursor: AdmissionCursor,
+): Promise<{ fixtures: SportmonksFixture[]; nextPage: number | null }> {
   if (!config.sportmonksApiToken) throw new Error("fixture_admission_primary_token_missing");
-  const url = new URL(`${config.sportmonksApiUrl}/fixtures/between/${utcDate}/${utcDate}`);
+  const end = utcDate(Date.parse(`${cursor.windowStart}T00:00:00Z`) + (ADMISSION_WINDOW_DAYS - 1) * 86_400_000);
+  const url = new URL(`${config.sportmonksApiUrl}/fixtures/between/${cursor.windowStart}/${end}`);
   url.searchParams.set("api_token", config.sportmonksApiToken);
   url.searchParams.set("include", "participants;state");
   url.searchParams.set("per_page", "50");
+  url.searchParams.set("page", String(cursor.page));
   const response = await fetch(url, {
     headers: { accept: "application/json", "user-agent": "airarena-arc-fixture-admission/1" },
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`fixture_admission_primary_http_${response.status}`);
   const raw = await response.text();
-  if (raw.length > 2_000_000) throw new Error("fixture_admission_primary_payload_too_large");
-  return JSON.parse(raw) as unknown;
+  if (raw.length > 5_000_000) throw new Error("fixture_admission_primary_payload_too_large");
+  return normalizeSportmonksFixturePage(JSON.parse(raw) as unknown);
 }
 
 async function appendAdmissionEvent(
@@ -386,27 +369,20 @@ async function appendAdmissionEvent(
 
 async function recordAdmissionDecision(
   db: Database,
-  fixture: TxlineFixture,
+  fixture: SportmonksFixture,
   input: {
-    status: "DISCOVERED" | "INELIGIBLE" | "NO_PRIMARY" | "AMBIGUOUS_PRIMARY" | "FAILED";
-    eventType: "DISCOVERED" | "INELIGIBLE" | "PRIMARY_UNAVAILABLE" | "PRIMARY_AMBIGUOUS" | "ADMISSION_FAILED";
+    status: "DISCOVERED" | "INELIGIBLE" | "FAILED";
+    eventType: "DISCOVERED" | "INELIGIBLE" | "ADMISSION_FAILED";
     error?: string;
-    primary?: SportmonksFixture;
-    candidates?: SportmonksFixture[];
     retrySeconds?: number;
   },
 ): Promise<void> {
-  const stateIdentity = `txline-candidate:${fixture.fixtureId}`;
-  const candidateHash = hashJson(fixture);
-  const primaryHash = input.primary ? hashJson(input.primary.raw) : null;
+  const stateIdentity = `sportmonks-only:${fixture.fixtureIdentity}`;
+  const candidateHash = hashJson(fixture.raw);
   const payload = {
     status: input.status,
     reason: input.error ?? null,
     candidateHash,
-    primaryCandidates: input.candidates?.map((candidate) => ({
-      fixtureIdentity: candidate.fixtureIdentity,
-      candidateHash: hashJson(candidate.raw),
-    })) ?? [],
   };
   const client = await db.connect();
   try {
@@ -429,9 +405,8 @@ async function recordAdmissionDecision(
          last_observed_at = clock_timestamp(), updated_at = clock_timestamp()
        WHERE arc_fixture_admission_state.status <> 'ADMITTED'`,
       [
-        stateIdentity, input.status, candidateHash, JSON.stringify(fixture),
-        input.primary?.fixtureIdentity ?? null, primaryHash,
-        input.primary ? JSON.stringify(input.primary.raw) : null,
+        stateIdentity, input.status, candidateHash, JSON.stringify(fixture.raw),
+        fixture.fixtureIdentity, candidateHash, JSON.stringify(fixture.raw),
         input.error?.slice(0, 1000) ?? null, input.retrySeconds ?? null,
       ],
     );
@@ -441,7 +416,7 @@ async function recordAdmissionDecision(
       candidateHash,
       payload,
     };
-    if (input.primary) eventInput.witnessFixtureIdentity = input.primary.fixtureIdentity;
+    eventInput.witnessFixtureIdentity = fixture.fixtureIdentity;
     await appendAdmissionEvent(client, eventInput);
     await client.query("COMMIT");
   } catch (error) {
@@ -453,10 +428,16 @@ async function recordAdmissionDecision(
 }
 
 async function shouldAttempt(db: Database, fixtureId: string): Promise<boolean> {
+  const existingMarket = await db.query<{ present: boolean }>(
+    "SELECT EXISTS(SELECT 1 FROM arc_markets WHERE fixture_id = $1) AS present",
+    [fixtureId],
+  );
+  if (existingMarket.rows[0]?.present) return false;
+  const stateIdentity = `sportmonks-only:${fixtureId}`;
   const result = await db.query<{ status: string; due: boolean }>(
     `SELECT status, (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp()) AS due
        FROM arc_fixture_admission_state WHERE primary_fixture_identity = $1`,
-    [fixtureId],
+    [stateIdentity],
   );
   const row = result.rows[0];
   return !row || (row.status !== "ADMITTED" && row.due);
@@ -465,21 +446,18 @@ async function shouldAttempt(db: Database, fixtureId: string): Promise<boolean> 
 async function admitMarket(
   config: ArcConfig,
   db: Database,
-  witness: TxlineFixture,
   primary: SportmonksFixture,
 ): Promise<{ marketId: Hex; jobId: string; created: boolean }> {
   const binding: WitnessBinding = {
-    adapterId: ORACLE_ADAPTERS.TXLINE_V1,
-    fixtureIdentity: witness.fixtureId,
-    accessTier: "FREE",
+    adapterId: ORACLE_ADAPTERS.SPORTMONKS_CONFIRMATION_V1,
+    fixtureIdentity: primary.fixtureIdentity,
+    accessTier: primary.accessTier,
     authenticated: true,
   };
   const qualification = await verifyQualifyingWitness(binding, config);
-  const spec = buildAutomaticMarketSpec(config, witness, primary);
+  const spec = buildAutomaticMarketSpec(config, primary);
   const externalIdHash = keccak256(stringToHex(`sportmonks:${primary.fixtureIdentity}`));
-  const sourceEventId = keccak256(stringToHex(
-    `sportmonks:${primary.fixtureIdentity}:txline:${witness.fixtureId}`,
-  ));
+  const sourceEventId = keccak256(stringToHex(`sportmonks:${primary.fixtureIdentity}`));
   const primarySigner = privateKeyToAccount(config.oraclePrimarySignerPrivateKey!).address;
   const witnessSigner = privateKeyToAccount(config.oracleWitnessSignerPrivateKey!).address;
   const resolutionRule = {
@@ -494,7 +472,8 @@ async function admitMarket(
   };
   const closeTime = new Date(spec.tradingClosesAt);
   const candidateHash = hashJson(primary.raw);
-  const witnessCandidateHash = hashJson(witness);
+  const witnessCandidateHash = candidateHash;
+  const stateIdentity = `sportmonks-only:${primary.fixtureIdentity}`;
   const client = await db.connect();
   try {
     await client.query("BEGIN");
@@ -523,7 +502,7 @@ async function admitMarket(
            witness_adapter_id, witness_fixture_identity, witness_access_tier, witness_qualified_at,
            witness_qualification_hash, witness_qualification_observed_at, market_spec, admission_source
          ) VALUES (
-           $1,$2,$3,3,$4,'QUEUED','SPORTMONKS_PRIMARY_1X2_REGULATION',
+           $1,$2,$3,3,$4,'QUEUED','SPORTMONKS_ONLY_1X2_REGULATION',
            'SPORTS','SPORTMONKS',$2,$5,$6::jsonb,'Regulation-time 1X2 result',
            $7,$8::jsonb,$9,$2,$10,$11,$12,clock_timestamp(),$13,$14,$15::jsonb,'AUTOMATIC_FIXTURE_WORKER'
          )`,
@@ -532,7 +511,7 @@ async function admitMarket(
           `${primary.homeTeam} vs ${primary.awayTeam}`,
           JSON.stringify([primary.homeTeam, "Draw", primary.awayTeam]),
           spec.specHash, JSON.stringify(resolutionRule), ORACLE_ADAPTERS.SPORTMONKS_V1,
-          ORACLE_ADAPTERS.TXLINE_V1, witness.fixtureId, "FREE",
+          ORACLE_ADAPTERS.SPORTMONKS_CONFIRMATION_V1, primary.fixtureIdentity, primary.accessTier,
           qualification.rawPayloadHash, qualification.observedAt, canonicalizeArcJson(spec),
         ],
       );
@@ -561,15 +540,15 @@ async function admitMarket(
          attempt_count = arc_fixture_admission_state.attempt_count + 1,
          last_error = NULL, next_attempt_at = NULL, admitted_at = clock_timestamp(),
          last_observed_at = clock_timestamp(), updated_at = clock_timestamp()`,
-      [primary.fixtureIdentity, candidateHash, JSON.stringify(primary.raw), witness.fixtureId,
-        witnessCandidateHash, JSON.stringify(witness), spec.marketId],
+      [stateIdentity, candidateHash, JSON.stringify(primary.raw), primary.fixtureIdentity,
+        witnessCandidateHash, JSON.stringify(primary.raw), spec.marketId],
     );
     await appendAdmissionEvent(client, {
-      fixtureId: primary.fixtureIdentity,
+      fixtureId: stateIdentity,
       eventType: "MARKET_ADMITTED",
       candidateHash,
       marketId: spec.marketId as Hex,
-      witnessFixtureIdentity: witness.fixtureId,
+      witnessFixtureIdentity: primary.fixtureIdentity,
       payload: {
         marketId: spec.marketId,
         specHash: spec.specHash,
@@ -619,73 +598,75 @@ export async function runFixtureAdmissionCycle(
   logger: Logger,
   state: AdmissionRuntimeState,
 ): Promise<AdmissionCycleResult> {
-  const fixtures = await fetchTxlineWitnessFixtures(config);
-  const result: AdmissionCycleResult = { scanned: fixtures.length, eligible: 0, admitted: 0, skipped: 0, failed: 0 };
-  const primaryByDate = new Map<string, Promise<unknown>>();
-  for (const fixture of fixtures) {
-    if (state.stopping || result.admitted >= config.fixtureAdmission.maxPerRun) break;
-    const eligibility = txlineWitnessEligibility(fixture, {
-      nowMs: Date.now(),
-      horizonDays: config.fixtureAdmission.horizonDays,
-      minLeadSeconds: config.fixtureAdmission.minLeadSeconds,
-    });
-    if (!eligibility.eligible) continue;
-    result.eligible += 1;
-    try {
-      const utcDate = eligibility.startsAt.toISOString().slice(0, 10);
-      let primaryRequest = primaryByDate.get(utcDate);
-      if (!primaryRequest) {
-        primaryRequest = fetchSportmonksPrimaryDate(config, utcDate);
-        primaryByDate.set(utcDate, primaryRequest);
+  const nowMs = Date.now();
+  const today = utcDate(nowMs);
+  const horizonEnd = utcDate(nowMs + config.fixtureAdmission.horizonDays * 86_400_000);
+  let cursor = await readAdmissionCursor(db, config, nowMs);
+  const result: AdmissionCycleResult = { scanned: 0, eligible: 0, admitted: 0, skipped: 0, failed: 0 };
+  let providerPages = 0;
+  let keepCurrentPage = false;
+
+  while (!state.stopping
+      && result.scanned < config.fixtureAdmission.scanLimit
+      && providerPages < MAX_PROVIDER_PAGES_PER_CYCLE
+      && cursor.windowStart <= horizonEnd) {
+    const page = await fetchSportmonksFixturePage(config, cursor);
+    providerPages += 1;
+    keepCurrentPage = false;
+    for (const fixture of page.fixtures) {
+      if (state.stopping || result.scanned >= config.fixtureAdmission.scanLimit) {
+        keepCurrentPage = true;
+        break;
       }
-      const primaryMatch = matchSportmonksPrimaryFixture(fixture, await primaryRequest);
-      if (primaryMatch.kind === "NONE") {
+      result.scanned += 1;
+      const eligibility = sportmonksFixtureEligibility(fixture, {
+        nowMs,
+        horizonDays: config.fixtureAdmission.horizonDays,
+        minLeadSeconds: config.fixtureAdmission.minLeadSeconds,
+      });
+      if (!eligibility.eligible) {
+        result.skipped += 1;
+        continue;
+      }
+      result.eligible += 1;
+      if (!(await shouldAttempt(db, fixture.fixtureIdentity))) {
+        result.skipped += 1;
+        continue;
+      }
+      if (result.admitted >= config.fixtureAdmission.maxPerRun) {
+        // Re-read this deterministic provider page next cycle. Already-admitted
+        // fixtures are idempotently skipped, so no fixture is lost at the cap.
+        keepCurrentPage = true;
+        break;
+      }
+      try {
+        const admitted = await admitMarket(config, db, fixture);
+        result.admitted += 1;
+        logger.info({
+          fixtureId: fixture.fixtureIdentity,
+          primaryFixtureId: fixture.fixtureIdentity,
+          confirmationFixtureId: fixture.fixtureIdentity,
+          marketId: admitted.marketId,
+          jobId: admitted.jobId,
+          created: admitted.created,
+        }, "arc_fixture_market_admitted");
+      } catch (error) {
+        result.failed += 1;
+        const message = errorMessage(error);
         await recordAdmissionDecision(db, fixture, {
-          status: "NO_PRIMARY",
-          eventType: "PRIMARY_UNAVAILABLE",
-          error: primaryMatch.reason,
+          status: "FAILED",
+          eventType: "ADMISSION_FAILED",
+          error: message,
           retrySeconds: config.fixtureAdmission.retrySeconds,
-        });
-        result.skipped += 1;
-        continue;
+        }).catch(() => undefined);
+        logger.warn({ err: error, fixtureId: fixture.fixtureIdentity }, "arc_fixture_admission_failed_closed");
       }
-      if (primaryMatch.kind === "AMBIGUOUS") {
-        await recordAdmissionDecision(db, fixture, {
-          status: "AMBIGUOUS_PRIMARY",
-          eventType: "PRIMARY_AMBIGUOUS",
-          error: primaryMatch.reason,
-          candidates: primaryMatch.candidates,
-          retrySeconds: config.fixtureAdmission.retrySeconds,
-        });
-        result.skipped += 1;
-        continue;
-      }
-      if (!(await shouldAttempt(db, primaryMatch.primary.fixtureIdentity))) {
-        result.skipped += 1;
-        continue;
-      }
-      const admitted = await admitMarket(config, db, fixture, primaryMatch.primary);
-      result.admitted += 1;
-      logger.info({
-        fixtureId: primaryMatch.primary.fixtureIdentity,
-        primaryFixtureId: primaryMatch.primary.fixtureIdentity,
-        witnessFixtureId: fixture.fixtureId,
-        marketId: admitted.marketId,
-        jobId: admitted.jobId,
-        created: admitted.created,
-      }, "arc_fixture_market_admitted");
-    } catch (error) {
-      result.failed += 1;
-      const message = errorMessage(error);
-      await recordAdmissionDecision(db, fixture, {
-        status: "FAILED",
-        eventType: "ADMISSION_FAILED",
-        error: message,
-        retrySeconds: config.fixtureAdmission.retrySeconds,
-      }).catch(() => undefined);
-      logger.warn({ err: error, fixtureId: fixture.fixtureId }, "arc_fixture_admission_failed_closed");
     }
+    if (keepCurrentPage) break;
+    cursor = page.nextPage ? { ...cursor, page: page.nextPage } : nextWindow(cursor);
   }
+  if (cursor.windowStart > horizonEnd) cursor = { windowStart: today, page: 1 };
+  await writeAdmissionCursor(db, cursor);
   state.lastFixtureAdmissionAt = new Date().toISOString();
   state.fixtureAdmissionScanned = result.scanned;
   state.fixtureAdmissionAdmitted += result.admitted;

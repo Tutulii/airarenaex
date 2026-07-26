@@ -114,9 +114,10 @@ describe("OracleAdapterV1", () => {
     expect(report).toMatchObject({ finalResult: true, homeScore: 1, awayScore: 1, normalizedOutcome: 1 });
   });
 
-  it("reserves future Pyth and election identifiers as explicitly disabled", () => {
+  it("enables Sportmonks confirmation and disables legacy/future adapters", () => {
     expect(adapterRegistration(ORACLE_ADAPTERS.SPORTMONKS_V1)).toMatchObject({ enabled: true, role: "PRIMARY" });
-    expect(adapterRegistration(ORACLE_ADAPTERS.TXLINE_V1)).toMatchObject({ enabled: true, role: "WITNESS" });
+    expect(adapterRegistration(ORACLE_ADAPTERS.SPORTMONKS_CONFIRMATION_V1)).toMatchObject({ enabled: true, role: "WITNESS" });
+    expect(adapterRegistration(ORACLE_ADAPTERS.TXLINE_V1)).toMatchObject({ enabled: false, role: "RESERVED" });
     expect(adapterRegistration(ORACLE_ADAPTERS.PYTH_V1)).toMatchObject({ enabled: false, role: "RESERVED" });
     expect(adapterRegistration(ORACLE_ADAPTERS.ELECTION_V1)).toMatchObject({ enabled: false, role: "RESERVED" });
   });

@@ -283,15 +283,16 @@ export async function buildApi(dependencies: ApiDependencies) {
               primary_adapter_id, witness_adapter_id, witness_fixture_identity
          FROM arc_markets
         WHERE primary_adapter_id = 'sportmonks.football.v3'
-          AND witness_adapter_id = 'txline.sports-result.v1'
+          AND witness_adapter_id = 'sportmonks.football.v3.confirmation'
+          AND intake_enabled
         ORDER BY COALESCE(market_spec->>'scheduledStartAt', close_time::text), market_id
         LIMIT $1`,
       [limit],
     );
     return {
       success: true,
-      source: "sportmonks-primary",
-      witness: "txline",
+      source: "sportmonks",
+      confirmation: "airarena-signed-sportmonks-payload",
       // Preserve the existing fixture endpoint's nested provider-envelope
       // shape so current MCP clients do not need a response migration.
       data: { success: true, data: result.rows },
@@ -301,7 +302,7 @@ export async function buildApi(dependencies: ApiDependencies) {
   app.get<{ Querystring: { status?: string; category?: string; limit?: string } }>("/v1/markets", async (request) => {
     const limit = Math.min(100, Math.max(1, Number(request.query.limit ?? 50) || 50));
     const values: unknown[] = [];
-    const clauses: string[] = [];
+    const clauses: string[] = ["intake_enabled"];
     if (request.query.status) {
       const status = request.query.status.toUpperCase();
       if (!["QUEUED", "OPEN", "RESOLVED", "INVALID"].includes(status)) throw new Error("invalid_market_status");
@@ -440,7 +441,7 @@ export async function buildApi(dependencies: ApiDependencies) {
     const input = PrepareOrderSchema.parse(request.body);
     await assertOperationAllowed(db, "INTAKE", input.marketId);
     const market = await db.query<OrderableMarketState>(
-      "SELECT outcome_count, status, close_time FROM arc_markets WHERE market_id = $1",
+      "SELECT outcome_count, status, close_time, intake_enabled FROM arc_markets WHERE market_id = $1",
       [input.marketId],
     );
     validateOrderableMarket(market.rows[0], input.outcome);
@@ -490,7 +491,7 @@ export async function buildApi(dependencies: ApiDependencies) {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('airarena_arc_risk_admission'))");
       await assertOperationAllowed(client, "INTAKE", order.marketId);
       const market = await client.query<OrderableMarketState>(
-        "SELECT outcome_count, status, close_time FROM arc_markets WHERE market_id = $1 FOR SHARE",
+        "SELECT outcome_count, status, close_time, intake_enabled FROM arc_markets WHERE market_id = $1 FOR SHARE",
         [order.marketId],
       );
       const marketState = market.rows[0];
@@ -1034,7 +1035,7 @@ export async function buildApi(dependencies: ApiDependencies) {
            spec_hash, resolution_rule, primary_adapter_id, primary_fixture_identity,
            witness_adapter_id, witness_fixture_identity, witness_access_tier, witness_qualified_at,
            witness_qualification_hash, witness_qualification_observed_at
-         ) VALUES ($1,$2,$3,$4,$5,'QUEUED','SPORTMONKS_PRIMARY_1X2_REGULATION',$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb,
+         ) VALUES ($1,$2,$3,$4,$5,'QUEUED','SPORTMONKS_ONLY_1X2_REGULATION',$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb,
            $14,$15,$16,$17,$18,clock_timestamp(),$19,$20)
          ON CONFLICT (market_id) DO NOTHING`,
         [

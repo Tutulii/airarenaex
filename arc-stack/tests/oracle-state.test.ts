@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { recoverTypedDataAddress, type Hex } from "viem";
-import { ORACLE_ADAPTERS, parseSportmonksOracleReport, parseTxlineOracleReport } from "../src/oracle-adapter.js";
+import {
+  deriveSportmonksConfirmation,
+  ORACLE_ADAPTERS,
+  parseSportmonksOracleReport,
+} from "../src/oracle-adapter.js";
 import {
   assertQualifyingWitness,
   evaluateOracleQuorum,
@@ -11,16 +15,6 @@ import {
 
 const primaryKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as Hex;
 const exchange = "0x6B42F8Ec16EE7C580213D0d07076019aBD6eE071";
-
-function txlineWitness(at = "2026-07-23T12:00:00.000Z") {
-  return parseTxlineOracleReport({
-    success: true,
-    data: {
-      fixtureId: "fixture-1", status: "final", homeScore: 1, awayScore: 0, winner: "part1",
-      sourceUpdateId: "10", sourceTimestamp: at, sequence: 10,
-    },
-  }, undefined, at);
-}
 
 function sportmonksPrimary(at = "2026-07-23T12:00:01.000Z", score: [number, number] = [1, 0]) {
   return parseSportmonksOracleReport({
@@ -35,23 +29,26 @@ function sportmonksPrimary(at = "2026-07-23T12:00:01.000Z", score: [number, numb
   }, undefined, at);
 }
 
-describe("independent witness and evidence binding", () => {
-  it("rejects TxLINE witness qualification without a free authenticated endpoint", () => {
+describe("Sportmonks evidence confirmation and binding", () => {
+  it("rejects confirmation qualification without an authenticated Sportmonks credential", () => {
     const binding = {
-      adapterId: ORACLE_ADAPTERS.TXLINE_V1,
+      adapterId: ORACLE_ADAPTERS.SPORTMONKS_CONFIRMATION_V1,
       fixtureIdentity: "9901",
-      accessTier: "FREE" as const,
+      accessTier: "TRIAL" as const,
       authenticated: true as const,
     };
     expect(() => assertQualifyingWitness(binding, {})).toThrow("oracle_witness_credential_unavailable");
-    expect(() => assertQualifyingWitness(binding, { txlineSourceUrl: "https://txline.test" })).not.toThrow();
+    expect(() => assertQualifyingWitness(binding, { sportmonksApiToken: "test-token" })).not.toThrow();
   });
 
-  it("requires fresh primary plus witness agreement", () => {
+  it("requires fresh primary plus separately signed confirmation agreement", () => {
     const options = { nowMs: Date.parse("2026-07-23T12:00:02.000Z"), maxAgeSeconds: 30, maxSkewSeconds: 10 };
-    expect(evaluateOracleQuorum(sportmonksPrimary(), txlineWitness(), options)).toMatchObject({ state: "HEALTHY", outcome: 0 });
-    expect(evaluateOracleQuorum(sportmonksPrimary(undefined, [0, 1]), txlineWitness(), options)).toMatchObject({ state: "DIVERGENT", outcome: null });
-    expect(evaluateOracleQuorum(sportmonksPrimary("2026-07-23T11:00:00.000Z"), txlineWitness(), options)).toMatchObject({ state: "STALE", outcome: null });
+    const primary = sportmonksPrimary();
+    const confirmation = deriveSportmonksConfirmation(primary);
+    expect(evaluateOracleQuorum(primary, confirmation, options)).toMatchObject({ state: "HEALTHY", outcome: 0 });
+    expect(evaluateOracleQuorum(primary, { ...confirmation, normalizedOutcome: 2 }, options)).toMatchObject({ state: "DIVERGENT", outcome: null });
+    const stale = sportmonksPrimary("2026-07-23T11:00:00.000Z");
+    expect(evaluateOracleQuorum(stale, deriveSportmonksConfirmation(stale), options)).toMatchObject({ state: "STALE", outcome: null });
     expect(evaluateOracleQuorum(sportmonksPrimary(), null, options)).toMatchObject({ state: "UNAVAILABLE", outcome: null });
   });
 

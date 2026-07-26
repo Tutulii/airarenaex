@@ -87,11 +87,14 @@ export const CreateMarketSchema = z.object({
   oracleBinding: z.object({
     primaryAdapterId: z.literal("sportmonks.football.v3"),
     primaryFixtureIdentity: z.string().trim().min(1).max(256),
-    witnessAdapterId: z.literal("txline.sports-result.v1"),
+    witnessAdapterId: z.literal("sportmonks.football.v3.confirmation"),
     witnessFixtureIdentity: z.string().trim().min(1).max(256),
-    witnessAccessTier: z.literal("FREE"),
+    witnessAccessTier: z.enum(["FREE", "TRIAL"]),
     witnessAuthenticated: z.literal(true),
-  }).strict(),
+  }).strict().refine(
+    (binding) => binding.primaryFixtureIdentity === binding.witnessFixtureIdentity,
+    "Sportmonks confirmation must bind the same fixture",
+  ),
   resolutionRule: z.object({
     primarySourceId: Bytes32Schema,
     witnessSourceId: Bytes32Schema,

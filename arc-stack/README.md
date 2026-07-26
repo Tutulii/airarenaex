@@ -6,7 +6,7 @@ Isolated ARC Testnet execution stack for AIR Arena Exchange. Its contracts, data
 
 | Service | Role |
 | --- | --- |
-| `airarena-arc-api` | Wallet authentication, TxLINE fixture access, market/order APIs, durable job creation |
+| `airarena-arc-api` | Wallet authentication, Sportmonks fixture access, market/order APIs, durable job creation |
 | `airarena-arc-middleman` | Arc transaction relay, automatic fixture admission, matching, evidence-quorum settlement, recovery-safe job worker, event indexer |
 | `airarena-arc-mcp` | Arc-only MCP tools for agent discovery, transaction preparation, and signed-order relay |
 | Arc Postgres | Authentication challenges, hashed API tokens, orders, markets, jobs, events, and indexer state |
@@ -43,7 +43,7 @@ Configuration rejects any other chain ID or collateral address. Arc's native gas
 - Deployer/admin, market-admin, matcher, resolver, and relayer roles are separate.
 - Database state and blockchain jobs are committed atomically.
 - Job idempotency and on-chain state recovery prevent duplicate submission after worker crashes.
-- TxLINE outcomes must pass strict source, final-status, regulation-period, score, and winner consistency checks before resolution is queued.
+- Sportmonks outcomes must pass strict fixture, final-status, regulation-period, score, freshness, and evidence-binding checks before resolution is queued.
 - Result evidence is stored append-only with a deterministic hash; settlement is enqueued once and projected from confirmed Arc state.
 - Public football markets use explicit three-outcome ordering: home `0`, draw `1`, away `2`. Unsupported or ambiguous results fail closed.
 - Agent-owned jobs cannot be read by a different authenticated wallet.
@@ -106,15 +106,15 @@ Operator endpoints remain outside the frontend proxy allowlist. Wallet account r
 
 The public market model treats `SPORTS`, `CRYPTO`, and `POLITICS` as first-class categories. Every market carries explicit category, oracle source, oracle reference, outcome labels, and human-readable resolution rules. Public clients can filter by category and lifecycle state without inferring either from a title.
 
-The deployed settlement adapter currently admits only TxLINE regulation-time sports markets. Crypto and Politics remain fail-closed until a dedicated adapter defines its trusted source, evidence schema, freshness policy, outcome mapping, and deterministic Arc resolution path. The API cannot label an unregistered source as supported, and the frontend does not manufacture placeholder markets or prices.
+The deployed settlement adapter currently admits Sportmonks regulation-time sports markets. Crypto and Politics remain fail-closed until a dedicated adapter defines its evidence source, schema, freshness policy, outcome mapping, and deterministic Arc resolution path. The API cannot label an unregistered source as supported, and the frontend does not manufacture placeholder markets or prices.
 
 ## Autonomous market lifecycle
 
-1. The singleton fixture-admission worker discovers supported upcoming fixtures and admits a market only after an exact, unique, independently authenticated witness fixture is bound.
+1. The singleton fixture-admission worker pages eligible upcoming Sportmonks fixtures directly and admits one canonical market per fixture.
 2. Agents fund their own accounts and submit EIP-712 signed outcome-share orders.
 3. The middleman crosses compatible orders using deterministic price-time priority and submits the batch to Arc.
-4. After market close, the elected result watcher independently reads the primary and witness evidence sources. Missing, stale, divergent, or malformed evidence cannot select a winner.
-5. Agreeing final evidence is bound to the immutable market specification, recorded append-only, and queued idempotently. Grace expiry without quorum invalidates by the precommitted rule.
+4. After market close, the elected result watcher authenticates the Sportmonks payload and produces two separately signed V3 evidence envelopes bound to that same immutable response. Missing, stale, or malformed evidence cannot select a winner.
+5. Final evidence is bound to the immutable market specification, recorded append-only, and queued idempotently. Grace expiry without valid evidence invalidates by the precommitted rule.
 6. The resolver submits the evidence envelopes to Arc. Agents redeem winning shares without an operator choosing the outcome.
 
 Automatic admission is disabled by default and must be enabled explicitly on the middleman with `ARC_FIXTURE_ADMISSION_ENABLED=true`. The interval, horizon, minimum lead time, scan limit, per-cycle cap, and retry delay are controlled by the `ARC_FIXTURE_ADMISSION_*` variables defined in `src/config.ts`. Admission decisions and failures are durable in `arc_fixture_admission_state`; every decision is independently auditable in the immutable `arc_fixture_admission_events` log.

@@ -27,6 +27,7 @@ integration("isolated /v1/exchange API", () => {
     ARC_RPC_URL: "https://rpc.example.invalid",
     ARC_EXCHANGE_ADDRESS: "0x00000000000000000000000000000000000000a1",
     ARC_RECEIPT_SIGNER_PRIVATE_KEY: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+    SPORTMONKS_API_TOKEN: "integration-sportmonks-token",
     AUTH_TOKEN_PEPPER: pepper,
     ARC_OPERATOR_TOKEN: operatorToken,
   });
@@ -90,6 +91,9 @@ integration("isolated /v1/exchange API", () => {
     const adapters = await app.inject({ method: "GET", url: "/v1/exchange/oracles/adapters" });
     expect(adapters.statusCode).toBe(200);
     expect(adapters.json().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "sportmonks.football.v3", enabled: true, role: "PRIMARY" }),
+      expect.objectContaining({ id: "sportmonks.football.v3.confirmation", enabled: true, role: "WITNESS" }),
+      expect.objectContaining({ id: "txline.sports-result.v1", enabled: false, role: "RESERVED" }),
       expect.objectContaining({ id: "pyth.price.v1", enabled: false, role: "RESERVED" }),
       expect.objectContaining({ id: "election.result.v1", enabled: false, role: "RESERVED" }),
     ]));
@@ -97,6 +101,44 @@ integration("isolated /v1/exchange API", () => {
     const halts = await app.inject({ method: "GET", url: "/v1/exchange/operator/risk/halts" });
     expect(halts.statusCode).toBe(403);
     expect(halts.json()).toMatchObject({ error: { code: "operator_unauthorized" } });
+  });
+
+  it("exposes only Sportmonks-only intake markets in default public listings", async () => {
+    const legacyMarketId = `0x${"31".repeat(32)}`;
+    const sportmonksMarketId = `0x${"32".repeat(32)}`;
+    await db.query(
+      `INSERT INTO arc_markets(
+         market_id, fixture_id, external_id_hash, outcome_count, close_time, status,
+         settlement_policy, category, oracle_source, oracle_reference, display_title,
+         primary_adapter_id, primary_fixture_identity, witness_adapter_id,
+         witness_fixture_identity, witness_access_tier, witness_qualified_at,
+         witness_qualification_hash, witness_qualification_observed_at, intake_enabled, market_spec
+       ) VALUES
+       ($1,'legacy-fixture',$3,3,clock_timestamp() + interval '1 day','OPEN',
+        'SPORTMONKS_PRIMARY_1X2_REGULATION','SPORTS','SPORTMONKS','legacy-fixture','Legacy market',
+        'sportmonks.football.v3','legacy-fixture','txline.sports-result.v1','legacy-witness','FREE',clock_timestamp(),
+        $5,clock_timestamp(),false,
+        '{"scheduledStartAt":"2026-09-01T00:00:00Z"}'::jsonb),
+       ($2,'sportmonks-fixture',$4,3,clock_timestamp() + interval '2 days','OPEN',
+        'SPORTMONKS_ONLY_1X2_REGULATION','SPORTS','SPORTMONKS','sportmonks-fixture','Sportmonks market',
+        'sportmonks.football.v3','sportmonks-fixture','sportmonks.football.v3.confirmation','sportmonks-fixture','TRIAL',clock_timestamp(),
+        $6,clock_timestamp(),true,
+        '{"scheduledStartAt":"2026-09-02T00:00:00Z"}'::jsonb)`,
+      [legacyMarketId, sportmonksMarketId, `0x${"33".repeat(32)}`, `0x${"34".repeat(32)}`,
+        `0x${"35".repeat(32)}`, `0x${"36".repeat(32)}`],
+    );
+
+    const markets = await app.inject({ method: "GET", url: "/v1/exchange/markets?category=SPORTS" });
+    expect(markets.statusCode).toBe(200);
+    expect(markets.json().data.map((market: { market_id: string }) => market.market_id)).toEqual([sportmonksMarketId]);
+
+    const fixtures = await app.inject({ method: "GET", url: "/v1/exchange/fixtures" });
+    expect(fixtures.statusCode).toBe(200);
+    expect(fixtures.json()).toMatchObject({
+      source: "sportmonks",
+      confirmation: "airarena-signed-sportmonks-payload",
+      data: { data: [{ market_id: sportmonksMarketId, fixture_id: "sportmonks-fixture" }] },
+    });
   });
 
   it("permits withdrawal preparation through ordinary halts and blocks custody-safety halts", async () => {
@@ -153,10 +195,10 @@ integration("isolated /v1/exchange API", () => {
     expect(mismatch.json()).toMatchObject({ error: { code: "idempotency_key_reused", retryable: false } });
   });
 
-  it("rejects market creation before enqueue when no authenticated free witness is configured", async () => {
+  it("rejects market creation before enqueue when the authenticated Sportmonks fixture does not match", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      success: true,
-      data: [{ fixtureId: "another-txline-fixture" }],
+      data: { id: "another-sportmonks-fixture" },
+      subscription: [{ type: "trial" }],
     }), { status: 200, headers: { "content-type": "application/json" } }));
     const response = await app.inject({
       method: "POST",
@@ -173,9 +215,9 @@ integration("isolated /v1/exchange API", () => {
         oracleBinding: {
           primaryAdapterId: "sportmonks.football.v3",
           primaryFixtureIdentity: "sportmonks-fixture-without-witness",
-          witnessAdapterId: "txline.sports-result.v1",
-          witnessFixtureIdentity: "txline-fixture",
-          witnessAccessTier: "FREE",
+          witnessAdapterId: "sportmonks.football.v3.confirmation",
+          witnessFixtureIdentity: "sportmonks-fixture-without-witness",
+          witnessAccessTier: "TRIAL",
           witnessAuthenticated: true,
         },
         resolutionRule: {
@@ -191,7 +233,7 @@ integration("isolated /v1/exchange API", () => {
       },
     });
     expect(response.statusCode).toBe(422);
-    expect(response.json()).toMatchObject({ error: { code: "oracle_witness_fixture_not_found" } });
+    expect(response.json()).toMatchObject({ error: { code: "oracle_witness_fixture_mismatch" } });
     fetchMock.mockRestore();
     const jobs = await db.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM arc_jobs WHERE idempotency_key LIKE 'create-market:%'",

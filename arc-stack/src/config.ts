@@ -44,13 +44,6 @@ const EnvironmentSchema = z.object({
   ARC_API_URL: z.string().url().default("http://localhost:3000"),
   ARC_OPERATOR_TOKEN: z.string().min(32).optional(),
   ARC_CORS_ORIGINS: z.string().default(""),
-  TXLINE_SOURCE_URL: z.string().url().default("https://api-server-production-8a16.up.railway.app"),
-  TXLINE_SSE_URL: z.preprocess(
-    (value) => (value === "" || value === undefined ? undefined : value),
-    z.string().url().optional(),
-  ),
-  TXLINE_API_TOKEN: z.string().min(16).optional(),
-  TXLINE_GUEST_JWT: z.string().min(16).optional(),
   SPORTMONKS_API_URL: z.string().url().default("https://api.sportmonks.com/v3/football"),
   SPORTMONKS_API_TOKEN: z.string().min(16).optional(),
   ARC_ORACLE_PRIMARY_SIGNER_PRIVATE_KEY: OptionalPrivateKeySchema,
@@ -113,10 +106,6 @@ export type ArcConfig = {
   apiUrl: string;
   operatorToken?: string;
   corsOrigins: string[];
-  txlineSourceUrl: string;
-  txlineSseUrl?: string;
-  txlineApiToken?: string;
-  txlineGuestJwt?: string;
   sportmonksApiUrl: string;
   sportmonksApiToken?: string;
   oraclePrimarySignerPrivateKey?: `0x${string}`;
@@ -195,12 +184,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ArcConfig {
     if (!parsed.ARC_LIQUIDITY_AGENT_PRIVATE_KEY || !parsed.ARC_LIQUIDITY_AGENT_ADDRESS) {
       throw new Error("ARC_LIQUIDITY_AGENT_PRIVATE_KEY and ARC_LIQUIDITY_AGENT_ADDRESS are required for middleman production");
     }
-    if (!parsed.TXLINE_SOURCE_URL.startsWith("https://")) {
-      throw new Error("TXLINE_SOURCE_URL must use HTTPS in middleman production");
-    }
-    if (parsed.TXLINE_SSE_URL && !parsed.TXLINE_API_TOKEN) {
-      throw new Error("TXLINE_API_TOKEN is required when TXLINE_SSE_URL is configured");
-    }
   }
   if (parsed.SERVICE_ROLE === "api" && parsed.NODE_ENV === "production" && !parsed.AUTH_TOKEN_PEPPER) {
     throw new Error("AUTH_TOKEN_PEPPER is required for API production");
@@ -238,7 +221,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ArcConfig {
     usdcAddress: parsed.ARC_USDC_ADDRESS,
     apiUrl: parsed.ARC_API_URL.replace(/\/$/, ""),
     corsOrigins: parsed.ARC_CORS_ORIGINS.split(",").map((value) => value.trim()).filter(Boolean),
-    txlineSourceUrl: parsed.TXLINE_SOURCE_URL.replace(/\/$/, ""),
     sportmonksApiUrl: parsed.SPORTMONKS_API_URL.replace(/\/$/, ""),
     oracleRecoveryObservations: parsed.ARC_ORACLE_RECOVERY_OBSERVATIONS,
     oracleStaleAfterSeconds: parsed.ARC_ORACLE_STALE_AFTER_SECONDS,
@@ -290,9 +272,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ArcConfig {
   if (parsed.ARC_RECEIPT_SIGNER_PRIVATE_KEY) config.receiptSignerPrivateKey = parsed.ARC_RECEIPT_SIGNER_PRIVATE_KEY as `0x${string}`;
   if (parsed.ARC_OPERATOR_TOKEN) config.operatorToken = parsed.ARC_OPERATOR_TOKEN;
   if (parsed.AUTH_TOKEN_PEPPER) config.authTokenPepper = parsed.AUTH_TOKEN_PEPPER;
-  if (parsed.TXLINE_SSE_URL) config.txlineSseUrl = parsed.TXLINE_SSE_URL;
-  if (parsed.TXLINE_API_TOKEN) config.txlineApiToken = parsed.TXLINE_API_TOKEN;
-  if (parsed.TXLINE_GUEST_JWT) config.txlineGuestJwt = parsed.TXLINE_GUEST_JWT;
   if (parsed.SPORTMONKS_API_TOKEN) config.sportmonksApiToken = parsed.SPORTMONKS_API_TOKEN;
   if (parsed.ARC_ORACLE_PRIMARY_SIGNER_PRIVATE_KEY) {
     config.oraclePrimarySignerPrivateKey = parsed.ARC_ORACLE_PRIMARY_SIGNER_PRIVATE_KEY as `0x${string}`;

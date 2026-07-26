@@ -353,7 +353,7 @@ async function createMarket(): Promise<{ marketId: Hex; closeTime: string; creat
       outcomeCount: 3,
       closeTime,
       category: "SPORTS",
-      oracleSource: "TXLINE",
+      oracleSource: "SPORTMONKS",
       displayTitle: "AIR Arena V2 production smoke",
       outcomeLabels: ["Alpha", "Draw", "Beta"],
       resolutionRules: "Controlled Arc Testnet production deployment smoke",

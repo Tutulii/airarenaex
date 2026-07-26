@@ -70,8 +70,8 @@ describe("trusted TxLINE outcomes", () => {
       oracleBinding: {
         primaryAdapterId: "sportmonks.football.v3",
         primaryFixtureIdentity: "18257865",
-        witnessAdapterId: "txline.sports-result.v1",
-        witnessFixtureIdentity: "9901",
+        witnessAdapterId: "sportmonks.football.v3.confirmation",
+        witnessFixtureIdentity: "18257865",
         witnessAccessTier: "FREE",
         witnessAuthenticated: true,
       },
